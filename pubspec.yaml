@@ -1,0 +1,29 @@
+name: roomcast_fm
+description: "Roomcast FM — multi-room audio streaming controller"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  multicast_dns: ^0.3.2       # mDNS discovery of _roomcast._tcp.local.
+  http: ^1.2.0                # REST API client
+  flutter_riverpod: ^2.5.1    # state management
+  riverpod_annotation: ^2.3.5
+  flutter_slidable: ^3.1.1    # swipe-to-delete on device list
+  shared_preferences: ^2.3.0  # persist discovered service URL
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.9
+  riverpod_generator: ^2.4.0
+
+flutter:
+  uses-material-design: true
