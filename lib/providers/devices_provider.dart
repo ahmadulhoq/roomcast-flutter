@@ -1,5 +1,7 @@
 // Manages paired devices list and scan results.
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
 import '../services/api_client.dart';
@@ -9,58 +11,91 @@ import 'service_provider.dart';
 // Paired devices
 // ------------------------------------------------------------------
 
-class DevicesNotifier extends StateNotifier<AsyncValue<List<PairedDevice>>> {
-  DevicesNotifier(this._client) : super(const AsyncValue.loading()) {
+/// How often the device list (states, streaming) is refreshed in the
+/// background while connected. Null disables polling (tests).
+final devicesPollIntervalProvider =
+    Provider<Duration?>((ref) => const Duration(seconds: 5));
+
+class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
+  DevicesNotifier(this._client, {Duration? pollInterval})
+      : super(const AsyncValue.loading()) {
     refresh();
-  }
-
-  final RoomcastApiClient _client;
-
-  Future<void> refresh() async {
-    state = const AsyncValue.loading();
-    try {
-      final devices = await _client.listDevices();
-      state = AsyncValue.data(devices);
-    } catch (e, st) {
-      state = AsyncValue.error(e, st);
+    if (pollInterval != null) {
+      _timer = Timer.periodic(pollInterval, (_) => refresh());
     }
   }
 
+  final RoomcastApiClient _client;
+  Timer? _timer;
+  int _requestSeq = 0;
+
+  Future<void> refresh() async {
+    final seq = ++_requestSeq;
+    // Keep showing the current list while reloading (no spinner flash).
+    state = const AsyncValue<DevicesSnapshot>.loading().copyWithPrevious(state);
+    try {
+      final snapshot = await _client.getDevices();
+      if (mounted && seq == _requestSeq) state = AsyncValue.data(snapshot);
+    } catch (e, st) {
+      if (mounted && seq == _requestSeq) {
+        state = AsyncValue<DevicesSnapshot>.error(e, st).copyWithPrevious(state);
+      }
+    }
+  }
+
+  /// Throws [ApiException] on failure.
   Future<void> remove(String id) async {
     await _client.removeDevice(id);
     await refresh();
   }
 
+  /// Optimistic: the slider shows the new level at once and is rolled back if
+  /// the request fails. Throws [ApiException] on failure.
   Future<void> setVolume(String id, int level) async {
-    await _client.setVolume(id, level);
-    // Optimistic update
-    state.whenData((devices) {
-      state = AsyncValue.data([
-        for (final d in devices)
-          if (d.id == id) d.copyWith(volume: level) else d,
-      ]);
-    });
+    final previous = state;
+    _updateDevice(id, (d) => d.copyWith(volume: level));
+    try {
+      await _client.setVolume(id, level);
+    } catch (_) {
+      if (mounted) state = previous;
+      rethrow;
+    }
   }
 
-  Future<void> enable(String id) async {
-    await _client.enableDevice(id);
+  /// Throws [ApiException] on failure.
+  Future<void> setEnabled(String id, bool enabled) async {
+    if (enabled) {
+      await _client.enableDevice(id);
+    } else {
+      await _client.disableDevice(id);
+    }
     await refresh();
   }
 
-  Future<void> disable(String id) async {
-    await _client.disableDevice(id);
-    await refresh();
+  void _updateDevice(String id, PairedDevice Function(PairedDevice) update) {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    state = AsyncValue.data(current.copyWith(devices: [
+      for (final d in current.devices)
+        if (d.id == id) update(d) else d,
+    ]));
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 }
 
 final devicesProvider = StateNotifierProvider<DevicesNotifier,
-    AsyncValue<List<PairedDevice>>>((ref) {
+    AsyncValue<DevicesSnapshot>>((ref) {
   final serviceState = ref.watch(serviceProvider);
   final client = serviceState.client;
   if (client == null) {
     return DevicesNotifier(_NullClient());
   }
-  return DevicesNotifier(client);
+  return DevicesNotifier(client, pollInterval: ref.watch(devicesPollIntervalProvider));
 });
 
 // ------------------------------------------------------------------
@@ -82,13 +117,16 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
     }
   }
 
-  Future<bool> addDevice(DiscoveredDevice discovered, String id) async {
+  /// Pair a discovered device. Returns null on success, else an error message.
+  Future<String?> addDevice(DiscoveredDevice discovered, String id) async {
     try {
       final config = discovered.toDeviceConfig(id: id);
       await _client.addDevice(config);
-      return true;
-    } catch (_) {
-      return false;
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    } catch (e) {
+      return e.toString();
     }
   }
 }
@@ -111,7 +149,7 @@ class _NullClient extends RoomcastApiClient {
   _NullClient() : super('http://localhost');
 
   @override
-  Future<List<PairedDevice>> listDevices() async => [];
+  Future<DevicesSnapshot> getDevices() async => DevicesSnapshot.empty;
 
   @override
   Future<List<DiscoveredDevice>> scan() async => [];

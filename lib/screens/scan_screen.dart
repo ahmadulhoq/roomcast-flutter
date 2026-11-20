@@ -116,13 +116,13 @@ class _DiscoveredDeviceTile extends ConsumerWidget {
 
   Future<void> _addDevice(BuildContext context, WidgetRef ref) async {
     // Use id_suggestion as the device id, deduplicated at API level
-    final ok = await ref
+    final error = await ref
         .read(scanProvider.notifier)
         .addDevice(device, device.idSuggestion);
 
     if (!context.mounted) return;
 
-    if (ok) {
+    if (error == null) {
       // Refresh paired list
       ref.read(devicesProvider.notifier).refresh();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -132,7 +132,7 @@ class _DiscoveredDeviceTile extends ConsumerWidget {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to add ${device.name}'),
+          content: Text('Failed to add ${device.name}: $error'),
           backgroundColor: Colors.red,
         ),
       );

@@ -41,9 +41,18 @@ class ServiceState {
   bool get isConnected => status == ConnectionState.connected && client != null;
 }
 
+/// Finds the backend on the network; returns its base URL or null.
+typedef ServiceFinder = Future<String?> Function();
+
+/// Overridable in tests (the real finder needs the platform plugin).
+final serviceFinderProvider =
+    Provider<ServiceFinder>((ref) => ServiceDiscovery.findService);
+
 class ServiceNotifier extends StateNotifier<ServiceState> {
-  ServiceNotifier()
+  ServiceNotifier(this._findService)
       : super(const ServiceState(status: ConnectionState.idle));
+
+  final ServiceFinder _findService;
 
   /// Try to load a previously saved URL, then connect.
   Future<void> loadSaved() async {
@@ -57,7 +66,7 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   /// Scan mDNS for the backend, then connect.
   Future<void> scanAndConnect() async {
     state = const ServiceState(status: ConnectionState.scanning);
-    final url = await ServiceDiscovery.findService();
+    final url = await _findService();
     if (url == null) {
       state = const ServiceState(
         status: ConnectionState.error,
@@ -96,5 +105,5 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
 final serviceProvider =
     StateNotifierProvider<ServiceNotifier, ServiceState>((ref) {
-  return ServiceNotifier();
+  return ServiceNotifier(ref.watch(serviceFinderProvider));
 });

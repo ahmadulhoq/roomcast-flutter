@@ -4,7 +4,11 @@ import '../providers/service_provider.dart' as sp;
 import 'home_screen.dart';
 
 class ConnectScreen extends ConsumerStatefulWidget {
-  const ConnectScreen({super.key});
+  /// Scan for the backend as soon as the screen opens (off after an explicit
+  /// Disconnect, so the app doesn't reconnect straight away).
+  final bool autoScan;
+
+  const ConnectScreen({super.key, this.autoScan = true});
 
   @override
   ConsumerState<ConnectScreen> createState() => _ConnectScreenState();
@@ -12,6 +16,20 @@ class ConnectScreen extends ConsumerStatefulWidget {
 
 class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _ipController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoScan) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final state = ref.read(sp.serviceProvider);
+        if (state.status != sp.ConnectionState.scanning && !state.isConnected) {
+          ref.read(sp.serviceProvider.notifier).scanAndConnect();
+        }
+      });
+    }
+  }
 
   @override
   void dispose() {

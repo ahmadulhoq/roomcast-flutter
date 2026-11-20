@@ -11,7 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  multicast_dns: ^0.3.2       # mDNS discovery of _roomcast._tcp.local.
+  bonsoir: ^6.0.3             # native Bonjour/NSD discovery of _roomcast._tcp (no multicast entitlement)
   http: ^1.2.0                # REST API client
   flutter_riverpod: ^2.5.1    # state management
   riverpod_annotation: ^2.3.5

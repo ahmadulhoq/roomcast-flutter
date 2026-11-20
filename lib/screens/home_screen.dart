@@ -34,7 +34,10 @@ class HomeScreen extends ConsumerWidget {
               if (v == 'disconnect') {
                 ref.read(serviceProvider.notifier).disconnect();
                 Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (_) => const ConnectScreen()),
+                  MaterialPageRoute(
+                    // The user chose to disconnect: don't auto-reconnect.
+                    builder: (_) => const ConnectScreen(autoScan: false),
+                  ),
                 );
               }
             },
@@ -43,7 +46,10 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          _ServiceStatusBar(serviceState: serviceState),
+          _ServiceStatusBar(
+            serviceState: serviceState,
+            streaming: devicesAsync.valueOrNull?.streaming,
+          ),
           Expanded(
             child: devicesAsync.when(
               loading: () => const Center(child: CircularProgressIndicator()),
@@ -64,7 +70,7 @@ class HomeScreen extends ConsumerWidget {
                   ],
                 ),
               ),
-              data: (devices) => devices.isEmpty
+              data: (snapshot) => snapshot.devices.isEmpty
                   ? Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -85,9 +91,11 @@ class HomeScreen extends ConsumerWidget {
                       onRefresh: () =>
                           ref.read(devicesProvider.notifier).refresh(),
                       child: ListView.builder(
-                        itemCount: devices.length,
-                        itemBuilder: (_, i) =>
-                            DeviceCard(device: devices[i]),
+                        itemCount: snapshot.devices.length,
+                        itemBuilder: (_, i) => DeviceCard(
+                          key: ValueKey(snapshot.devices[i].id),
+                          device: snapshot.devices[i],
+                        ),
                       ),
                     ),
             ),
@@ -108,7 +116,10 @@ class HomeScreen extends ConsumerWidget {
 class _ServiceStatusBar extends StatelessWidget {
   final ServiceState serviceState;
 
-  const _ServiceStatusBar({required this.serviceState});
+  /// Whether the backend is streaming audio (null = not known yet).
+  final bool? streaming;
+
+  const _ServiceStatusBar({required this.serviceState, this.streaming});
 
   @override
   Widget build(BuildContext context) {
@@ -122,12 +133,29 @@ class _ServiceStatusBar extends StatelessWidget {
               size: 10,
               color: serviceState.isConnected ? Colors.green : Colors.grey),
           const SizedBox(width: 8),
-          Text(
-            serviceState.isConnected
-                ? 'Connected — ${serviceState.baseUrl}'
-                : 'Not connected',
-            style: Theme.of(context).textTheme.bodySmall,
+          Expanded(
+            child: Text(
+              serviceState.isConnected
+                  ? 'Connected — ${serviceState.baseUrl}'
+                  : 'Not connected',
+              style: Theme.of(context).textTheme.bodySmall,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
+          if (serviceState.isConnected && streaming != null) ...[
+            Icon(
+              streaming! ? Icons.graphic_eq : Icons.pause_circle_outline,
+              size: 16,
+              color: streaming! ? Colors.green : Colors.grey,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              streaming! ? 'Streaming' : 'Idle',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: streaming! ? Colors.green.shade700 : Colors.grey,
+                  ),
+            ),
+          ],
         ],
       ),
     );
