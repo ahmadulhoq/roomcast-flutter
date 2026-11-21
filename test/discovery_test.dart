@@ -21,11 +21,20 @@ class FakeDiscoveryAction extends BonsoirAction<BonsoirDiscoveryEvent> with Serv
   Future<void> initialize() async => _ready = true;
 
   @override
-  Future<void> start() async => onStart?.call();
+  Future<void> start() async {
+    onStart?.call();
+    if (hangStart) await Completer<void>().future; // the platform never answers
+  }
+
   void Function()? onStart;
+  bool hangStart = false;
+  bool hangStop = false;
 
   @override
-  Future<void> stop() async => _stopped = true;
+  Future<void> stop() async {
+    _stopped = true;
+    if (hangStop) await Completer<void>().future;
+  }
 
   @override
   bool get isReady => _ready && !_stopped;
@@ -118,6 +127,17 @@ void main() {
       }
     };
     expect(await ServiceDiscovery.findService(timeout: const Duration(seconds: 2)), 'http://192.168.1.22:8888');
+  });
+
+  test('the timeout covers a platform call that never answers', () async {
+    action
+      ..hangStart = true
+      ..hangStop = true;
+    final started = DateTime.now();
+    final result = await ServiceDiscovery.findService(timeout: const Duration(milliseconds: 500))
+        .timeout(const Duration(seconds: 6), onTimeout: () => 'hung');
+    expect(result, isNull);
+    expect(DateTime.now().difference(started), lessThan(const Duration(seconds: 4)));
   });
 
   test('an error before anything is found ends the scan at once', () async {

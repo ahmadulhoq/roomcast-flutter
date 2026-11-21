@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:roomcast_fm/main.dart';
+import 'package:roomcast_fm/providers/devices_provider.dart';
 import 'package:roomcast_fm/providers/service_provider.dart';
 import 'package:roomcast_fm/screens/connect_screen.dart';
+import 'package:roomcast_fm/screens/home_screen.dart';
 import 'package:roomcast_fm/services/api_client.dart';
 
 class _ReplaceCounter extends NavigatorObserver {
@@ -250,8 +252,58 @@ void main() {
     await notifier.connectTo('http://192.168.1.20:8888');
     expect((await SharedPreferences.getInstance()).getString('service_base_url'), isNotNull);
     await notifier.disconnect();
-    expect((await SharedPreferences.getInstance()).getString('service_base_url'), isNull);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('service_base_url'), isNull);
+    expect(prefs.getBool('user_disconnected'), isTrue);
+    await notifier.connectTo('http://192.168.1.20:8888');
+    expect(prefs.getBool('user_disconnected'), isNull, reason: 'a new connection clears it');
     notifier.dispose();
+  });
+
+  testWidgets('after Disconnect the next launch does not scan and reconnect by itself',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'user_disconnected': true});
+    var scans = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() async {
+            scans++;
+            return 'http://192.168.1.20:8888';
+          }),
+          apiClientFactoryProvider.overrideWithValue((url) => _FakeApi(url, reachable: true)),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(scans, 0);
+    expect(find.text('Find Service Automatically'), findsOneWidget);
+  });
+
+  testWidgets('a failed scan is retried when the app returns (iOS permission prompt)',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    var scans = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          // The first scan fails while the Local Network prompt is up.
+          serviceFinderProvider.overrideWithValue(() async => ++scans == 1 ? null : 'http://192.168.1.20:8888'),
+          apiClientFactoryProvider.overrideWithValue((url) => _FakeApi(url, reachable: true)),
+          devicesPollIntervalProvider.overrideWithValue(null),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('No Roomcast FM service found on this network.'), findsOneWidget);
+    // The prompt made the app inactive; the user taps Allow.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(scans, 2);
+    expect(find.byType(HomeScreen), findsOneWidget);
   });
 
   testWidgets('an unreachable saved address stays visible after a failed auto-scan',

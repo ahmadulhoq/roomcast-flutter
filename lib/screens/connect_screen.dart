@@ -18,22 +18,37 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _ipController = TextEditingController();
   bool _navigated = false;
 
+  /// True once this screen started a scan (on open or with the button).
+  bool _scanned = false;
+  late final AppLifecycleListener _lifecycle;
+
   @override
   void initState() {
     super.initState();
+    // iOS asks for Local Network access on the first scan; the app is
+    // inactive while the prompt shows, and the scan can fail or time out
+    // before the user answers. Scan again when the app is back.
+    _lifecycle = AppLifecycleListener(onResume: () {
+      if (!mounted || !_scanned) return;
+      if (ref.read(sp.serviceProvider).status == sp.ConnectionState.error) _scan();
+    });
     if (widget.autoScan) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final state = ref.read(sp.serviceProvider);
-        if (state.status != sp.ConnectionState.scanning && !state.isConnected) {
-          ref.read(sp.serviceProvider.notifier).scanAndConnect();
-        }
+        if (state.status != sp.ConnectionState.scanning && !state.isConnected) _scan();
       });
     }
   }
 
+  void _scan() {
+    _scanned = true;
+    ref.read(sp.serviceProvider.notifier).scanAndConnect();
+  }
+
   @override
   void dispose() {
+    _lifecycle.dispose();
     _ipController.dispose();
     super.dispose();
   }
@@ -89,8 +104,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 ),
               ] else
                 FilledButton.icon(
-                  onPressed: () =>
-                      ref.read(sp.serviceProvider.notifier).scanAndConnect(),
+                  onPressed: _scan,
                   icon: const Icon(Icons.search),
                   label: const Text('Find Service Automatically'),
                 ),

@@ -169,6 +169,26 @@ void main() {
     notifier.dispose();
   });
 
+  testWidgets('a failed change while an earlier one is in flight falls back to that one', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 10}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 30);
+    final second = notifier.setVolume('cast', 60);
+    client.volumeCalls[1].completeError(ApiException('timeout'));
+    await expectLater(second, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 30, reason: 'the 30 may still land; not the stale 10');
+    client.volumeCalls[0].complete();
+    await first;
+    // The re-sync refresh started before the 30 landed: it must not undo it.
+    client.pending.last.complete(snap({'cast': 10}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 30);
+    notifier.dispose();
+  });
+
   testWidgets('a failed enable still re-syncs with the server', (tester) async {
     final client = SlowClient()..failEnable = true;
     final notifier = DevicesNotifier(client);

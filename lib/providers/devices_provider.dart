@@ -131,8 +131,8 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// Optimistic: the slider shows the new level at once. It stays shown,
   /// even over refreshes that started before the server applied it, until
   /// the server reports it. On failure (unless a newer change was made) the
-  /// last level the server accepted is shown again — an earlier change it
-  /// may not report yet, else its own list — and the list is re-synced.
+  /// change before it is shown again — still in flight or accepted but not
+  /// reported yet — else the server's own level, and the list is re-synced.
   /// Throws [ApiException] on failure.
   Future<void> setVolume(String id, int level) async {
     final previous = _pendingVolumes[id];
@@ -146,8 +146,8 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
       pending.confirmedAtSeq = _requestSeq;
     } catch (_) {
       if (identical(_pendingVolumes[id], pending)) {
-        if (previous?.confirmedAtSeq != null) {
-          _pendingVolumes[id] = previous!;
+        if (previous != null) {
+          _pendingVolumes[id] = previous; // its own outcome then decides
         } else {
           _pendingVolumes.remove(id);
         }

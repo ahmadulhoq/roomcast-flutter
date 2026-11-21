@@ -15,12 +15,14 @@ import 'package:bonsoir/bonsoir.dart';
 
 const serviceType = '_roomcast._tcp';
 const _scanTimeout = Duration(seconds: 8);
+const _stopTimeout = Duration(seconds: 2);
 
 class ServiceDiscovery {
   /// Scan the local network for a Roomcast FM backend.
   ///
   /// Returns the base URL (http://ip:port) of the first service found,
-  /// or null if none is found within [timeout] or discovery fails.
+  /// or null if none is found within [timeout] (which covers the whole scan,
+  /// a platform call that never answers included) or discovery fails.
   static Future<String?> findService({Duration timeout = _scanTimeout}) async {
     final discovery = BonsoirDiscovery(type: serviceType);
     final found = Completer<String?>();
@@ -58,8 +60,9 @@ class ServiceDiscovery {
       Future<void>.delayed(const Duration(milliseconds: 300), pump);
     };
 
-    try {
+    Future<String?> scan() async {
       await discovery.initialize();
+      if (done) return null; // timed out meanwhile
       subscription = discovery.eventStream!.listen(
         (event) {
           switch (event) {
@@ -95,14 +98,18 @@ class ServiceDiscovery {
         },
       );
       await discovery.start();
-      return await found.future.timeout(timeout, onTimeout: () => null);
+      return found.future;
+    }
+
+    try {
+      return await scan().timeout(timeout, onTimeout: () => null);
     } catch (_) {
       return null; // no service / discovery unavailable — caller shows manual entry
     } finally {
       done = true;
       await subscription?.cancel();
       try {
-        await discovery.stop();
+        await discovery.stop().timeout(_stopTimeout);
       } catch (_) {}
     }
   }

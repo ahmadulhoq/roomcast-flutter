@@ -9,6 +9,10 @@ import '../services/api_client.dart';
 
 const _prefKey = 'service_base_url';
 
+/// Set by an explicit Disconnect, cleared by the next successful connect: the
+/// app then doesn't scan (and reconnect) on its own at launch.
+const _disconnectedKey = 'user_disconnected';
+
 enum ConnectionState { idle, scanning, connected, error }
 
 class ServiceState {
@@ -86,6 +90,10 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   bool _isStale(int attempt) =>
       !mounted || attempt <= _cancelledUpTo || attempt < _connectedAttempt;
 
+  /// True if the user disconnected and hasn't connected since.
+  Future<bool> userDisconnected() async =>
+      (await SharedPreferences.getInstance()).getBool(_disconnectedKey) ?? false;
+
   /// Try to load a previously saved URL, then connect.
   Future<void> loadSaved() async {
     final prefs = await SharedPreferences.getInstance();
@@ -146,7 +154,10 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     // Close the replaced connection's HTTP client.
     if (previous != null && !identical(previous, client)) previous.dispose();
     final prefs = await SharedPreferences.getInstance();
-    if (identical(_connected, client)) await prefs.setString(_prefKey, baseUrl);
+    if (identical(_connected, client)) {
+      await prefs.setString(_prefKey, baseUrl);
+      await prefs.remove(_disconnectedKey);
+    }
   }
 
   /// Show a failure. With a working connection nothing changes (the state
@@ -168,8 +179,8 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     );
   }
 
-  /// Disconnect and forget the saved address, so the next launch doesn't
-  /// reconnect on its own.
+  /// Disconnect and forget the saved address; the next launch doesn't scan
+  /// or reconnect on its own either.
   Future<void> disconnect() async {
     _cancelledUpTo = _attempt; // a scan/connect still in flight must not reconnect
     _connected?.dispose();
@@ -178,6 +189,7 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     state = const ServiceState(status: ConnectionState.idle);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefKey);
+    await prefs.setBool(_disconnectedKey, true);
   }
 }
 
