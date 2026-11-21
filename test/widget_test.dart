@@ -173,6 +173,32 @@ void main() {
     expect(observer.replacements, 1);
   });
 
+  test('a failed manual connect does not cancel a scan that then finds the service', () async {
+    SharedPreferences.setMockInitialValues({});
+    final scan = Completer<String?>();
+    final notifier = ServiceNotifier(() => scan.future,
+        clientFactory: (url) => _FakeApi(url, reachable: !url.contains('typo')));
+    final scanning = notifier.scanAndConnect();
+    await notifier.connectTo('http://typo:8888');
+    expect(notifier.state.status.name, 'scanning', reason: 'scan still running');
+    scan.complete('http://192.168.1.20:8888');
+    await scanning;
+    expect(notifier.state.isConnected, isTrue);
+    expect(notifier.state.baseUrl, 'http://192.168.1.20:8888');
+    notifier.dispose();
+  });
+
+  test('disconnect forgets the saved address', () async {
+    SharedPreferences.setMockInitialValues({});
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: true));
+    await notifier.connectTo('http://192.168.1.20:8888');
+    expect((await SharedPreferences.getInstance()).getString('service_base_url'), isNotNull);
+    await notifier.disconnect();
+    expect((await SharedPreferences.getInstance()).getString('service_base_url'), isNull);
+    notifier.dispose();
+  });
+
   testWidgets('an unreachable saved address stays visible after a failed auto-scan',
       (WidgetTester tester) async {
     // flutter_test answers every real HTTP request with 400, so the saved URL fails.

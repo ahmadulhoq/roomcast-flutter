@@ -55,7 +55,7 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Remove ${device.name}?'),
+        title: Text('Remove $name?'), // captured: the card may be gone by now
         content: const Text(
             'It stops playing and is unpaired. You can add it again with Add Speaker.'),
         actions: [

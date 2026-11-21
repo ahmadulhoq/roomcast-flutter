@@ -87,9 +87,11 @@ class ServiceDiscovery {
         onError: (Object _) {
           if (tracker.resolving) {
             onResolveFailed();
-          } else if (!found.isCompleted) {
+          } else if (!tracker.hasKnown && !found.isCompleted) {
             found.complete(null);
           }
+          // Otherwise (e.g. Android "Failed to register service info callback"
+          // right after a resolve): not fatal, keep going until the timeout.
         },
       );
       await discovery.start();
@@ -118,10 +120,13 @@ class ServiceDiscovery {
     var host = (txtAddress != null && _usable(txtAddress)) ? txtIp : service.host;
     if (host == null || host.isEmpty || service.port <= 0) return null;
     if (host.endsWith('.')) host = host.substring(0, host.length - 1);
-    final address = InternetAddress.tryParse(host);
+    // InternetAddress.tryParse rejects a zone ID (Android NSD reports
+    // link-local IPv6 as "fe80::1%wlan0"), so parse without it — otherwise
+    // the address isn't bracketed and the URL doesn't parse.
+    final address = InternetAddress.tryParse(host.split('%').first);
     if (address != null && !_usable(address)) return null;
     if (address != null && address.type == InternetAddressType.IPv6) {
-      host = '[$host]';
+      host = '[$host]'; // Uri.parse encodes the zone's '%' as %25
     }
     return 'http://$host:${service.port}';
   }
@@ -145,6 +150,9 @@ class ResolveTracker {
 
   /// True while a resolve started by [next] hasn't finished.
   bool get resolving => _inFlight != null;
+
+  /// True once any service has been found (and not lost since).
+  bool get hasKnown => _attempts.isNotEmpty;
 
   /// A service was found: queue it (once; a re-announce of a known service
   /// is ignored until it is lost).

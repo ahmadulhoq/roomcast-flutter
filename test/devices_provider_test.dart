@@ -212,6 +212,23 @@ void main() {
     notifier.dispose();
   });
 
+  testWidgets('a notifier created while backgrounded does not poll until resumed', (tester) async {
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump(const Duration(seconds: 16));
+    expect(client.pending.length, 1, reason: 'no polling in the background');
+    for (final s in [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await tester.pump();
+    expect(client.pending.length, 2);
+    notifier.dispose();
+  });
+
   testWidgets('a failed remove still re-syncs with the server', (tester) async {
     final client = SlowClient()..failRemove = true;
     final notifier = DevicesNotifier(client);

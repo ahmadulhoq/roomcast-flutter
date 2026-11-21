@@ -34,8 +34,11 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
         super(const AsyncValue.loading()) {
     refresh();
     if (pollInterval != null) {
-      _startPolling();
-      // Don't poll while the app is in the background (battery, Wi-Fi).
+      // Don't poll while the app is in the background (battery, Wi-Fi). The
+      // listener only reports changes, so check the current state too (this
+      // notifier can be created while backgrounded, e.g. a connect finishing).
+      final lifecycle = WidgetsBinding.instance.lifecycleState;
+      if (lifecycle == null || lifecycle == AppLifecycleState.resumed) _startPolling();
       _lifecycle = AppLifecycleListener(onStateChange: _onLifecycleChange);
     }
   }

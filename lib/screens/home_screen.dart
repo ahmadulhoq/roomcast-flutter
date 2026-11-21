@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/devices_provider.dart';
@@ -32,7 +34,7 @@ class HomeScreen extends ConsumerWidget {
             ],
             onSelected: (v) {
               if (v == 'disconnect') {
-                ref.read(serviceProvider.notifier).disconnect();
+                unawaited(ref.read(serviceProvider.notifier).disconnect());
                 Navigator.of(context).pushReplacement(
                   MaterialPageRoute(
                     // The user chose to disconnect: don't auto-reconnect.
