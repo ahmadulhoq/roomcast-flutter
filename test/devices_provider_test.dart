@@ -353,4 +353,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Failed to load devices'), findsOneWidget);
   });
+
+  testWidgets('Retry on the error view shows that it is retrying', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [devicesProvider.overrideWith((ref) => DevicesNotifier(client))],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(find.text('Retry'), findsNothing, reason: 'no second tap while it runs');
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    expect(find.text('Retry'), findsOneWidget);
+  });
 }

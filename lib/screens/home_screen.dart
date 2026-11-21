@@ -70,11 +70,16 @@ class HomeScreen extends ConsumerWidget {
                     Text('Failed to load devices: $e',
                         textAlign: TextAlign.center),
                     const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: () =>
-                          ref.read(devicesProvider.notifier).refresh(),
-                      child: const Text('Retry'),
-                    ),
+                    // A retry keeps the error state (it reloads over it), so
+                    // show its progress here.
+                    if (devicesAsync.isLoading)
+                      const CircularProgressIndicator()
+                    else
+                      FilledButton(
+                        onPressed: () =>
+                            ref.read(devicesProvider.notifier).refresh(),
+                        child: const Text('Retry'),
+                      ),
                   ],
                 ),
               ),

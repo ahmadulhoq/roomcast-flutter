@@ -72,8 +72,11 @@ class ServiceDiscovery {
             case BonsoirDiscoveryServiceResolvedEvent():
               handleResolved(event.service);
             case BonsoirDiscoveryServiceUpdatedEvent():
-              // e.g. TXT attributes (the backend's "ip") arriving after resolve
-              handleResolved(event.service);
+              // e.g. TXT attributes (the backend's "ip") arriving after
+              // resolve. iOS also reports TXT changes of services not
+              // resolved yet: only a usable address counts as a resolve,
+              // otherwise the service stays queued.
+              if (baseUrlFor(event.service) != null) handleResolved(event.service);
             case BonsoirDiscoveryServiceResolveFailedEvent():
               onResolveFailed();
             case BonsoirDiscoveryServiceLostEvent():

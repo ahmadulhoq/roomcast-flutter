@@ -153,6 +153,24 @@ void main() {
     expect(action.running, isFalse, reason: 'no browse left running in the background');
   });
 
+  test('a TXT update of a queued, unresolved service does not drop it from the queue', () async {
+    action.onStart = () {
+      action.emit(BonsoirDiscoveryServiceFoundEvent(service: svc('stale')));
+      action.emit(BonsoirDiscoveryServiceFoundEvent(service: svc('Roomcast FM')));
+    };
+    action.onResolve = (s) {
+      if (s.name == 'stale') {
+        // iOS reports the queued backend's TXT change (no host, no ip yet)…
+        action.emit(BonsoirDiscoveryServiceUpdatedEvent(service: svc('Roomcast FM', attrs: {'version': '1.0'})));
+        // …then the stale one resolves to an unusable address.
+        action.emit(BonsoirDiscoveryServiceResolvedEvent(service: svc('stale', host: '127.0.0.1')));
+      } else {
+        action.emit(BonsoirDiscoveryServiceResolvedEvent(service: svc(s.name, host: '192.168.1.23')));
+      }
+    };
+    expect(await ServiceDiscovery.findService(timeout: const Duration(seconds: 2)), 'http://192.168.1.23:8888');
+  });
+
   test('an error before anything is found ends the scan at once', () async {
     action.onStart = () => action.error(); // e.g. local-network permission denied
     final started = DateTime.now();

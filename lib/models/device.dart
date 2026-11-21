@@ -1,5 +1,7 @@
 // Models for Roomcast FM devices.
 
+import 'dart:io';
+
 enum DeviceType { chromecast, dlna, unknown }
 
 enum DeviceState { idle, connecting, playing, error, disabled, unknown }
@@ -43,17 +45,19 @@ class DiscoveredDevice {
 
   /// Build a device config dict for POST /api/devices.
   Map<String, dynamic> toDeviceConfig({required String id}) {
+    // No volume/enabled: a new speaker gets the backend's defaults, and
+    // re-pairing a known one keeps its stored settings.
     final config = <String, dynamic>{
       'id': id,
       'display_name': name,
       'type': type == DeviceType.chromecast ? 'chromecast' : 'dlna',
-      'enabled': true,
-      'volume': 75,
     };
     if (type == DeviceType.chromecast) {
       config['device_name'] = name;
     } else {
-      if (ip != null) config['device_ip'] = ip;
+      // device_ip must be IPv4 (location_url carries an IPv6 renderer).
+      final address = ip == null ? null : InternetAddress.tryParse(ip!);
+      if (address?.type == InternetAddressType.IPv4) config['device_ip'] = ip;
       if (locationUrl != null) config['location_url'] = locationUrl;
     }
     return config;

@@ -100,6 +100,21 @@ void main() {
       expect(config['location_url'], 'http://192.168.86.40:16500/rootDesc.xml');
     });
 
+    test('no volume/enabled defaults (re-pairing keeps the stored ones)', () {
+      const d = DiscoveredDevice(name: 'Dining Room', type: DeviceType.chromecast, idSuggestion: 'dining_room');
+      final config = d.toDeviceConfig(id: 'dining_room');
+      expect(config.containsKey('volume'), isFalse);
+      expect(config.containsKey('enabled'), isFalse);
+    });
+
+    test('device_ip only for an IPv4 address', () {
+      DiscoveredDevice dlna(String ip) => DiscoveredDevice(
+          name: 'KEF', type: DeviceType.dlna, ip: ip,
+          locationUrl: 'http://example/desc.xml', idSuggestion: 'kef');
+      expect(dlna('192.168.86.40').toDeviceConfig(id: 'kef')['device_ip'], '192.168.86.40');
+      expect(dlna('fd00::5').toDeviceConfig(id: 'kef').containsKey('device_ip'), isFalse);
+    });
+
     test('chromecast config uses the friendly name', () {
       const d = DiscoveredDevice(name: 'Dining Room', type: DeviceType.chromecast, idSuggestion: 'dining_room');
       expect(d.toDeviceConfig(id: 'dining_room')['device_name'], 'Dining Room');
