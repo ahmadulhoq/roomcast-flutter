@@ -274,9 +274,9 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
     state = const AsyncValue.loading();
     try {
       final devices = await _client.scan();
-      state = AsyncValue.data(devices);
+      if (mounted) state = AsyncValue.data(devices); // not if the connection changed meanwhile
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      if (mounted) state = AsyncValue.error(e, st);
     }
   }
 

@@ -430,6 +430,42 @@ void main() {
     notifier.dispose();
   });
 
+  test('a late connect to the backend already connected keeps the working connection', () async {
+    SharedPreferences.setMockInitialValues({});
+    final clients = <_FakeApi>[];
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: true)..let(clients.add));
+    await notifier.connectTo('http://192.168.1.20:8888');   // e.g. the scan's find
+    final connected = notifier.state;
+    await notifier.connectTo('http://192.168.1.20:8888');   // the manual connect, finishing later
+    expect(identical(notifier.state, connected), isTrue, reason: 'nothing rebuilt, no requests cut off');
+    expect(clients.first.disposed, isFalse);
+    expect(clients.last.disposed, isTrue);
+    notifier.dispose();
+  });
+
+  test('a new scan forgets an older failed manual connect', () async {
+    SharedPreferences.setMockInitialValues({});
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: false));
+    await notifier.connectTo('http://192.168.1.50:8888');   // mistyped, a minute ago
+    await notifier.scanAndConnect();                         // finds nothing
+    expect(notifier.state.errorMessage, isNot(contains('192.168.1.50')));
+    notifier.dispose();
+  });
+
+  test('a pasted endpoint is reduced to the base URL', () async {
+    SharedPreferences.setMockInitialValues({'service_base_url': 'http://192.168.1.5:8888/api/info'});
+    final urls = <String>[];
+    final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
+      urls.add(url);
+      return _FakeApi(url, reachable: true);
+    });
+    await notifier.loadSaved();
+    expect(urls, ['http://192.168.1.5:8888'], reason: 'not …/api/info/api/info');
+    notifier.dispose();
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

@@ -60,7 +60,7 @@ class RoomcastApiClient {
   Future<void> removeDevice(String id) async {
     try {
       final response = await _http
-          .delete(Uri.parse('$baseUrl/api/devices/$id'))
+          .delete(Uri.parse('$baseUrl/api/devices/${Uri.encodeComponent(id)}'))
           .timeout(const Duration(seconds: 10));
       _checkStatus(response);
     } on ApiException {
@@ -75,15 +75,15 @@ class RoomcastApiClient {
   // ------------------------------------------------------------------
 
   Future<void> setVolume(String id, int level) async {
-    await _post('/api/devices/$id/volume', {'level': level});
+    await _post('/api/devices/${Uri.encodeComponent(id)}/volume', {'level': level});
   }
 
   Future<void> enableDevice(String id) async {
-    await _post('/api/devices/$id/enable', {});
+    await _post('/api/devices/${Uri.encodeComponent(id)}/enable', {});
   }
 
   Future<void> disableDevice(String id) async {
-    await _post('/api/devices/$id/disable', {});
+    await _post('/api/devices/${Uri.encodeComponent(id)}/disable', {});
   }
 
   // ------------------------------------------------------------------

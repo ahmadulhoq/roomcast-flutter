@@ -97,8 +97,10 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   }
 
   /// Why the last connect attempt failed (e.g. the saved address at launch),
-  /// kept so a following failed scan doesn't hide it.
+  /// kept so a following failed scan doesn't hide it. A new scan forgets an
+  /// older failure, except the saved address's for the scan right after it.
   String? _lastConnectError;
+  bool _lastConnectErrorIsSaved = false;
 
   /// Every scan and connect gets a number. The newest *successful* attempt
   /// wins (an older one finishing later is dropped), a failed attempt never
@@ -130,7 +132,7 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     if (saved != null) {
       // Older versions saved what was typed ("http://x:8888/" → "//api/info"
       // 404s); a successful connect saves the normalized URL.
-      await connectTo(normalizeBaseUrl(saved) ?? saved);
+      await _connect(normalizeBaseUrl(saved) ?? saved, ++_attempt, savedAddress: true);
     }
   }
 
@@ -138,6 +140,8 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   Future<void> scanAndConnect() async {
     final attempt = ++_attempt;
     _scans.add(attempt);
+    if (!_lastConnectErrorIsSaved) _lastConnectError = null; // from before this scan
+    _lastConnectErrorIsSaved = false;
     if (_connected == null) state = const ServiceState(status: ConnectionState.scanning);
     // The scan counts as running until its own connect is done too, so a
     // manual connect failing meanwhile is shown next to its progress.
@@ -163,7 +167,7 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   /// Connect to a specific base URL (from manual entry or saved pref).
   Future<void> connectTo(String baseUrl) => _connect(baseUrl, ++_attempt);
 
-  Future<void> _connect(String baseUrl, int attempt) async {
+  Future<void> _connect(String baseUrl, int attempt, {bool savedAddress = false}) async {
     final client = _newClient(baseUrl);
     try {
       await client.getInfo();
@@ -174,13 +178,23 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
       final message = 'Could not reach service at $baseUrl: $e';
       // Kept to show with a later failed scan, but only if it's why there is
       // no connection (not a failed attempt while connected).
-      if (_connected == null) _lastConnectError = message;
+      if (_connected == null) {
+        _lastConnectError = message;
+        _lastConnectErrorIsSaved = savedAddress;
+      }
       _showFailure(message);
       return;
     }
     // No await between this check and the switch below, so a newer attempt
     // or a disconnect can't slip in between.
     if (_isStale(attempt)) {
+      client.dispose();
+      return;
+    }
+    if (_connected != null && _connected!.baseUrl == baseUrl) {
+      // Already connected to this backend (e.g. a manual connect to the
+      // address the scan found): keep the working connection rather than
+      // rebuilding everything and cutting off its requests.
       client.dispose();
       return;
     }

@@ -53,6 +53,14 @@ class SlowClient extends RoomcastApiClient {
   }
 }
 
+class SlowScanClient extends RoomcastApiClient {
+  SlowScanClient() : super('http://test');
+  final result = Completer<List<DiscoveredDevice>>();
+
+  @override
+  Future<List<DiscoveredDevice>> scan() => result.future;
+}
+
 DevicesSnapshot snap(Map<String, int> volumes) => DevicesSnapshot(streaming: true, devices: [
       for (final e in volumes.entries)
         PairedDevice(id: e.key, name: e.key, type: DeviceType.dlna, state: DeviceState.playing, volume: e.value),
@@ -247,6 +255,15 @@ void main() {
     expect(notifier.state.hasError, isTrue);
     expect(volumeOf(notifier, 'cast'), 80);
     notifier.dispose();
+  });
+
+  test('a speaker scan finishing after the connection changed is ignored', () async {
+    final client = SlowScanClient();
+    final notifier = ScanNotifier(client);
+    final scanning = notifier.scan();
+    notifier.dispose(); // the connection changed: scanProvider was rebuilt
+    client.result.completeError(ApiException('Network error: connection closed'));
+    await scanning; // used to throw: state set on a disposed notifier
   });
 
   testWidgets('a failed enable still re-syncs with the server', (tester) async {
