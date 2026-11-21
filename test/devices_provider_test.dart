@@ -231,6 +231,24 @@ void main() {
     notifier.dispose();
   });
 
+  testWidgets('an older refresh that succeeds is shown even if a newer one fails', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    unawaited(notifier.refresh()); // A
+    unawaited(notifier.refresh()); // B (e.g. tapped twice)
+    client.pending[1].complete(snap({'cast': 80})); // A answers
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80, reason: 'fresher than what was shown');
+    client.pending[2].completeError(ApiException('Network error: timeout')); // B times out
+    await tester.pump();
+    expect(notifier.state.hasError, isTrue);
+    expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
   testWidgets('a failed enable still re-syncs with the server', (tester) async {
     final client = SlowClient()..failEnable = true;
     final notifier = DevicesNotifier(client);

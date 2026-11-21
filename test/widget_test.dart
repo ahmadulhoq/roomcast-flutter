@@ -418,6 +418,18 @@ void main() {
     notifier.dispose();
   });
 
+  test('a path in the address (e.g. behind a reverse proxy) is kept', () async {
+    SharedPreferences.setMockInitialValues({'service_base_url': 'http://nas.local/roomcast/'});
+    final urls = <String>[];
+    final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
+      urls.add(url);
+      return _FakeApi(url, reachable: true);
+    });
+    await notifier.loadSaved();
+    expect(urls, ['http://nas.local/roomcast']);
+    notifier.dispose();
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

@@ -87,9 +87,12 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
     }
   }
 
-  /// Incremented by every refresh; a response is only applied if no newer
-  /// refresh started while it was in flight.
+  /// Incremented by every refresh. A successful response is applied unless a
+  /// newer one already was; a failure only if no newer refresh started.
   int _requestSeq = 0;
+
+  /// Sequence of the last response applied.
+  int _appliedSeq = 0;
 
   /// The refresh currently in flight, if any.
   Future<void>? _inFlight;
@@ -146,7 +149,10 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
     }
     try {
       final snapshot = await _client.getDevices();
-      if (!mounted || seq != _requestSeq) return;
+      // Fresher than what is shown, even if a newer refresh is still running
+      // (it may fail: the list shouldn't stay stale because of that).
+      if (!mounted || seq <= _appliedSeq) return;
+      _appliedSeq = seq;
       _server = snapshot;
       _pendingVolumes.removeWhere(
           (_, p) => p.confirmedAtSeq != null && seq > p.confirmedAtSeq!);
