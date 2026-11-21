@@ -104,6 +104,22 @@ void main() {
     expect(await ServiceDiscovery.findService(timeout: const Duration(seconds: 2)), 'http://192.168.1.21:8888');
   });
 
+  test('an error after a found service was lost again does not end the scan', () async {
+    action.onStart = () => action.emit(BonsoirDiscoveryServiceFoundEvent(service: svc('old')));
+    action.onResolve = (s) {
+      if (s.name == 'old') {
+        // The old instance goes away mid-resolve, then a non-fatal error,
+        // then the backend's new instance appears.
+        action.emit(BonsoirDiscoveryServiceLostEvent(service: svc('old')));
+        action.error();
+        action.emit(BonsoirDiscoveryServiceFoundEvent(service: svc('Roomcast FM')));
+      } else {
+        action.emit(BonsoirDiscoveryServiceResolvedEvent(service: svc(s.name, host: '192.168.1.22')));
+      }
+    };
+    expect(await ServiceDiscovery.findService(timeout: const Duration(seconds: 2)), 'http://192.168.1.22:8888');
+  });
+
   test('an error before anything is found ends the scan at once', () async {
     action.onStart = () => action.error(); // e.g. local-network permission denied
     final started = DateTime.now();

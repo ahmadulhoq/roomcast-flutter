@@ -87,7 +87,7 @@ class ServiceDiscovery {
         onError: (Object _) {
           if (tracker.resolving) {
             onResolveFailed();
-          } else if (!tracker.hasKnown && !found.isCompleted) {
+          } else if (!tracker.everFound && !found.isCompleted) {
             found.complete(null);
           }
           // Otherwise (e.g. Android "Failed to register service info callback"
@@ -151,12 +151,15 @@ class ResolveTracker {
   /// True while a resolve started by [next] hasn't finished.
   bool get resolving => _inFlight != null;
 
-  /// True once any service has been found (and not lost since).
-  bool get hasKnown => _attempts.isNotEmpty;
+  /// True once any service has been found, even if it was lost again:
+  /// discovery itself works, so a later error isn't fatal.
+  bool get everFound => _everFound;
+  bool _everFound = false;
 
   /// A service was found: queue it (once; a re-announce of a known service
   /// is ignored until it is lost).
   void found(BonsoirService service) {
+    _everFound = true;
     if (_attempts.containsKey(service.name)) return;
     _attempts[service.name] = 0;
     _queue.add(service);

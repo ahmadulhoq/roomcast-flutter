@@ -73,7 +73,12 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   int _attempt = 0;
   int _connectedAttempt = 0; // attempt of the current connection (0 = none)
   int _cancelledUpTo = 0;    // attempts up to this one were cancelled
-  int _scansInFlight = 0;
+
+  /// Attempt numbers of the scans still running. One cancelled by
+  /// disconnect() doesn't count: it can no longer connect.
+  final _scans = <int>{};
+
+  bool get _scanRunning => _scans.any((attempt) => attempt > _cancelledUpTo);
 
   /// The working connection, if any. A failed attempt never drops it.
   RoomcastApiClient? _connected;
@@ -93,13 +98,13 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   /// Scan mDNS for the backend, then connect.
   Future<void> scanAndConnect() async {
     final attempt = ++_attempt;
-    _scansInFlight++;
+    _scans.add(attempt);
     if (_connected == null) state = const ServiceState(status: ConnectionState.scanning);
     String? url;
     try {
       url = await _findService();
     } finally {
-      _scansInFlight--;
+      _scans.remove(attempt);
     }
     if (_isStale(attempt) || _connectedAttempt > 0) return; // cancelled, or already connected
     if (url == null) {
@@ -144,20 +149,14 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     if (identical(_connected, client)) await prefs.setString(_prefKey, baseUrl);
   }
 
-  /// Show a failure, unless a working connection exists (keep it) or a scan
-  /// is still running (it may still find the service).
+  /// Show a failure. With a working connection nothing changes (the state
+  /// is left as it is, so nothing watching it is rebuilt). While a scan is
+  /// still running (it may still find the service) the message is shown
+  /// next to its progress.
   void _showFailure(String message, {bool withLastError = false}) {
-    final connected = _connected;
-    if (connected != null) {
-      state = ServiceState(
-        status: ConnectionState.connected,
-        baseUrl: connected.baseUrl,
-        client: connected,
-      );
-      return;
-    }
-    if (_scansInFlight > 0) {
-      state = const ServiceState(status: ConnectionState.scanning);
+    if (_connected != null) return;
+    if (_scanRunning) {
+      state = ServiceState(status: ConnectionState.scanning, errorMessage: message);
       return;
     }
     state = ServiceState(

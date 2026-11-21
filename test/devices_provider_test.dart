@@ -149,6 +149,26 @@ void main() {
     notifier.dispose();
   });
 
+  testWidgets('a failed change after an accepted one falls back to the accepted level', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 80);
+    client.volumeCalls[0].complete();
+    await first; // the server has 80 now; no refresh has reported it yet
+    final second = notifier.setVolume('cast', 30);
+    client.volumeCalls[1].completeError(ApiException('timeout'));
+    await expectLater(second, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 80, reason: 'not the stale 50 from the last refresh');
+    // A refresh started after the 80 was accepted reports it; the overlay goes.
+    client.pending.last.complete(snap({'cast': 80}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
   testWidgets('a failed enable still re-syncs with the server', (tester) async {
     final client = SlowClient()..failEnable = true;
     final notifier = DevicesNotifier(client);

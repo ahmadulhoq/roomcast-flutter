@@ -188,6 +188,61 @@ void main() {
     notifier.dispose();
   });
 
+  test('a scan cancelled by disconnect does not hide a later connect failure', () async {
+    SharedPreferences.setMockInitialValues({});
+    final scan = Completer<String?>();
+    final notifier = ServiceNotifier(() => scan.future,
+        clientFactory: (url) => _FakeApi(url, reachable: !url.contains('typo')));
+    final scanning = notifier.scanAndConnect();
+    await notifier.disconnect();
+    await notifier.connectTo('http://typo:8888');
+    expect(notifier.state.status.name, 'error',
+        reason: 'the cancelled scan can no longer connect, so no spinner');
+    scan.complete('http://192.168.1.20:8888');
+    await scanning;
+    expect(notifier.state.status.name, 'error');
+    notifier.dispose();
+  });
+
+  test('a failed attempt while connected leaves the state untouched', () async {
+    SharedPreferences.setMockInitialValues({});
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: !url.contains('typo')));
+    await notifier.connectTo('http://192.168.1.20:8888');
+    final connected = notifier.state;
+    await notifier.connectTo('http://typo:8888');
+    await notifier.scanAndConnect(); // finds nothing
+    expect(identical(notifier.state, connected), isTrue,
+        reason: 'a new state object would rebuild the device list (and drop pending changes)');
+    notifier.dispose();
+  });
+
+  testWidgets('a failed manual connect during a scan shows its error', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final scan = Completer<String?>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() => scan.future),
+          apiClientFactoryProvider.overrideWithValue(
+              (url) => _FakeApi(url, reachable: !url.contains('typo'))),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'typo:8888');
+    await tester.tap(find.text('Connect'));
+    await tester.pump();
+    expect(find.text('Searching for Roomcast FM on your network…'), findsOneWidget);
+    expect(find.textContaining('Could not reach service at http://typo:8888'), findsOneWidget);
+    scan.complete(null);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No Roomcast FM service found on this network.'), findsOneWidget);
+    expect(find.textContaining('Could not reach service at http://typo:8888'), findsOneWidget);
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

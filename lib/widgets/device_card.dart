@@ -30,12 +30,16 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
   DevicesNotifier get _notifier => ref.read(devicesProvider.notifier);
 
   /// Run an API action; show [failure] + the server's message on error.
-  /// Pass [messenger] when the card may be gone by the time it fails.
+  /// Pass [messenger] and [notifier] when the card may be gone by the time it
+  /// fails. Nothing is shown if the notifier was disposed meanwhile (the app
+  /// disconnected or switched to another backend): that failure is moot.
   Future<void> _run(Future<void> Function() action, String failure,
-      {ScaffoldMessengerState? messenger}) async {
+      {ScaffoldMessengerState? messenger, DevicesNotifier? notifier}) async {
+    final owner = notifier ?? _notifier;
     try {
       await action();
     } catch (e) {
+      if (!owner.mounted) return;
       final target = messenger ?? (mounted ? ScaffoldMessenger.of(context) : null);
       if (target == null) return;
       final message = e is ApiException ? e.message : e.toString();
@@ -71,7 +75,8 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
       ),
     );
     if (confirmed == true) {
-      await _run(() => notifier.remove(id), 'Could not remove $name', messenger: messenger);
+      await _run(() => notifier.remove(id), 'Could not remove $name',
+          messenger: messenger, notifier: notifier);
     }
   }
 

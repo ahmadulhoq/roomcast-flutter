@@ -128,7 +128,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   child: const Text('Connect'),
                 ),
               ],
-              if (serviceState.status == sp.ConnectionState.error) ...[
+              // Also while scanning: a manual connect can fail during a scan.
+              if (serviceState.status == sp.ConnectionState.error ||
+                  serviceState.errorMessage != null) ...[
                 const SizedBox(height: 24),
                 Container(
                   padding: const EdgeInsets.all(12),

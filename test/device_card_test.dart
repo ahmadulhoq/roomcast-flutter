@@ -197,6 +197,45 @@ void main() {
     expect(find.textContaining('Could not remove Dining Room: backend busy'), findsOneWidget);
   });
 
+  testWidgets('no error is shown for an action whose connection is gone', (tester) async {
+    // e.g. Disconnect while the remove dialog is open: the device list (and
+    // its client) is replaced, so the old request's failure is moot.
+    final client = FakeClient(const DevicesSnapshot(streaming: true, devices: [_cast]))..failRemove = true;
+    final connection = StateProvider<int>((ref) => 0);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        devicesProvider.overrideWith((ref) {
+          ref.watch(connection);
+          return DevicesNotifier(client);
+        }),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: Consumer(builder: (context, ref, _) {
+            final snapshot = ref.watch(devicesProvider).valueOrNull;
+            if (snapshot == null) return const SizedBox();
+            return ListView(children: [
+              for (final d in snapshot.devices) DeviceCard(key: ValueKey(d.id), device: d),
+            ]);
+          }),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Slidable), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove'));
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(tester.element(find.byType(Scaffold).first));
+    container.read(connection.notifier).state++; // the old notifier is disposed
+    await tester.pump();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+    await tester.pumpAndSettle();
+    expect(client.calls, ['remove cast']);
+    expect(find.textContaining('Could not remove'), findsNothing);
+  });
+
   testWidgets('DLNA device shows the speaker icon', (tester) async {
     await pumpCard(tester, device: const PairedDevice(
       id: 'kef', name: 'KEF', type: DeviceType.dlna, enabled: false,

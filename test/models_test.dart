@@ -43,6 +43,14 @@ void main() {
       t.found(s('A'));
       expect(t.next()?.name, 'A');
     });
+
+    test('everFound stays true after the service is lost', () {
+      final t = ResolveTracker();
+      expect(t.everFound, isFalse);
+      t.found(s('A'));
+      t.lost(s('A'));
+      expect(t.everFound, isTrue);
+    });
   });
 
   group('DevicesSnapshot / PairedDevice', () {
