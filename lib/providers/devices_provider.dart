@@ -21,15 +21,37 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
       : super(const AsyncValue.loading()) {
     refresh();
     if (pollInterval != null) {
-      _timer = Timer.periodic(pollInterval, (_) => refresh());
+      _timer = Timer.periodic(pollInterval, (_) => _poll());
     }
   }
 
   final RoomcastApiClient _client;
   Timer? _timer;
+
+  /// Incremented by every refresh and every local change; a response is only
+  /// applied if no newer refresh or change happened while it was in flight.
   int _requestSeq = 0;
 
-  Future<void> refresh() async {
+  /// The refresh currently in flight, if any.
+  Future<void>? _inFlight;
+
+  /// Background poll: skipped while a refresh is still running, so a slow or
+  /// unreachable backend (requests time out after 10 s) can't stack requests
+  /// that each invalidate the previous one's result.
+  void _poll() {
+    if (_inFlight == null) refresh();
+  }
+
+  Future<void> refresh() {
+    final future = _refresh();
+    _inFlight = future;
+    future.whenComplete(() {
+      if (identical(_inFlight, future)) _inFlight = null;
+    });
+    return future;
+  }
+
+  Future<void> _refresh() async {
     final seq = ++_requestSeq;
     // Keep showing the current list while reloading (no spinner flash).
     state = const AsyncValue<DevicesSnapshot>.loading().copyWithPrevious(state);
@@ -52,18 +74,27 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// Optimistic: the slider shows the new level at once and is rolled back if
   /// the request fails. Throws [ApiException] on failure.
   Future<void> setVolume(String id, int level) async {
-    final previous = state;
+    final oldVolume = state.valueOrNull?.devices
+        .where((d) => d.id == id)
+        .map((d) => d.volume)
+        .firstOrNull;
+    // A refresh already in flight carries the old level: drop its result.
+    _requestSeq++;
     _updateDevice(id, (d) => d.copyWith(volume: level));
     try {
       await _client.setVolume(id, level);
     } catch (_) {
-      if (mounted) state = previous;
+      // Roll back only this device's volume, keeping any newer updates.
+      if (mounted && oldVolume != null) {
+        _updateDevice(id, (d) => d.copyWith(volume: oldVolume));
+      }
       rethrow;
     }
   }
 
   /// Throws [ApiException] on failure.
   Future<void> setEnabled(String id, bool enabled) async {
+    _requestSeq++; // an in-flight refresh predates this change
     if (enabled) {
       await _client.enableDevice(id);
     } else {

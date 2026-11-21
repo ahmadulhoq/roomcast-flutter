@@ -1,7 +1,8 @@
 // Discovery of the Roomcast FM backend on the local network.
 //
 // Uses the platform's native service discovery through bonsoir: Bonjour
-// (NSNetService/DNS-SD) on iOS and macOS, NsdManager on Android. Raw multicast
+// (DNS-SD) on iOS, NsdManager on Android. (The macOS build would also need the
+// network-client entitlement and the Bonjour Info.plist keys.) Raw multicast
 // sockets (the multicast_dns package) need Apple's restricted multicast
 // entitlement on iOS 14+ and a WifiManager.MulticastLock on Android; the
 // native APIs need neither — only NSBonjourServices (_roomcast._tcp) and
@@ -26,17 +27,28 @@ class ServiceDiscovery {
     StreamSubscription<BonsoirDiscoveryEvent>? subscription;
     try {
       await discovery.initialize();
-      subscription = discovery.eventStream!.listen((event) {
-        switch (event) {
-          case BonsoirDiscoveryServiceFoundEvent():
-            discovery.serviceResolver.resolveService(event.service);
-          case BonsoirDiscoveryServiceResolvedEvent():
-            final url = baseUrlFor(event.service);
-            if (url != null && !found.isCompleted) found.complete(url);
-          default:
-            break;
-        }
-      });
+      subscription = discovery.eventStream!.listen(
+        (event) {
+          switch (event) {
+            case BonsoirDiscoveryServiceFoundEvent():
+              // A failed resolve (e.g. Android NSD busy) just skips this
+              // instance; don't let it surface as an uncaught async error.
+              unawaited(discovery.serviceResolver
+                  .resolveService(event.service)
+                  .catchError((Object _) {}));
+            case BonsoirDiscoveryServiceResolvedEvent():
+              final url = baseUrlFor(event.service);
+              if (url != null && !found.isCompleted) found.complete(url);
+            default:
+              break;
+          }
+        },
+        // Discovery itself failed (e.g. local-network permission denied):
+        // stop waiting and let the caller offer manual entry.
+        onError: (Object _) {
+          if (!found.isCompleted) found.complete(null);
+        },
+      );
       await discovery.start();
       return await found.future.timeout(timeout, onTimeout: () => null);
     } catch (_) {

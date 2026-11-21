@@ -50,8 +50,13 @@ class HomeScreen extends ConsumerWidget {
             serviceState: serviceState,
             streaming: devicesAsync.valueOrNull?.streaming,
           ),
+          // A failed background refresh keeps the last list on screen (so a
+          // Wi-Fi blip doesn't cut off a volume drag) and shows this banner.
+          if (devicesAsync.hasError && devicesAsync.hasValue)
+            const _OfflineBanner(),
           Expanded(
             child: devicesAsync.when(
+              skipError: true, // error view only when there is no list to show
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(
                 child: Column(
@@ -108,6 +113,34 @@ class HomeScreen extends ConsumerWidget {
         ),
         icon: const Icon(Icons.add),
         label: const Text('Add Speaker'),
+      ),
+    );
+  }
+}
+
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Colors.orange.shade50,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Row(
+        children: [
+          Icon(Icons.wifi_off, size: 16, color: Colors.orange.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "Can't reach Roomcast FM — showing the last known state, retrying…",
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.orange.shade900),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -40,6 +40,11 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
   }
 
   Future<void> _confirmRemove() async {
+    // Read the notifier before awaiting the dialog: the card may be disposed
+    // while it is open (list refresh), and `ref` can't be used after that.
+    final notifier = _notifier;
+    final name = device.name;
+    final id = device.id;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -59,7 +64,7 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
       ),
     );
     if (confirmed == true) {
-      await _run(() => _notifier.remove(device.id), 'Could not remove ${device.name}');
+      await _run(() => notifier.remove(id), 'Could not remove $name');
     }
   }
 

@@ -126,6 +126,26 @@ void main() {
     expect(client.calls, ['remove cast']);
   });
 
+  testWidgets('remove still works if the card is gone when the dialog is confirmed', (tester) async {
+    final client = await pumpCard(tester);
+    await tester.drag(find.byType(Slidable), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove'));
+    await tester.pumpAndSettle();
+
+    // A refresh drops the card from the list while the dialog is open.
+    client.snapshot = const DevicesSnapshot(streaming: true, devices: []);
+    final container = ProviderScope.containerOf(tester.element(find.byType(ListView)));
+    await container.read(devicesProvider.notifier).refresh();
+    await tester.pump();
+    expect(find.byType(DeviceCard), findsNothing);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(client.calls, ['remove cast']);
+  });
+
   testWidgets('DLNA device shows the speaker icon', (tester) async {
     await pumpCard(tester, device: const PairedDevice(
       id: 'kef', name: 'KEF', type: DeviceType.dlna, enabled: false,
