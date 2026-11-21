@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
@@ -119,7 +121,9 @@ class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
         device.type == DeviceType.chromecast ? 'Google Cast' : 'DLNA / UPnP',
       ),
       trailing: FilledButton(
-        onPressed: _adding ? null : _addDevice,
+        onPressed: _adding || ref.read(scanProvider.notifier).isAdding(device.idSuggestion)
+            ? null
+            : _addDevice,
         child: const Text('Add'),
       ),
     );
@@ -127,28 +131,26 @@ class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
 
   Future<void> _addDevice() async {
     setState(() => _adding = true);
+    // Captured first: the tile can be rebuilt (e.g. "Scan again") before the
+    // request finishes, and its result must still be shown and applied.
+    final devices = ref.read(devicesProvider.notifier);
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final name = device.name;
     // Use id_suggestion as the device id, deduplicated at API level
     final error = await ref
         .read(scanProvider.notifier)
         .addDevice(device, device.idSuggestion);
 
-    if (!mounted) return;
-    setState(() => _adding = false);
-
     if (error == null) {
-      // Refresh paired list
-      ref.read(devicesProvider.notifier).refresh();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${device.name} added')),
-      );
-      Navigator.of(context).pop();
+      if (devices.mounted) unawaited(devices.refresh()); // the paired list
+      messenger.showSnackBar(SnackBar(content: Text('$name added')));
+      if (mounted) navigator.pop();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to add ${device.name}: $error'),
-          backgroundColor: Colors.red,
-        ),
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to add $name: $error'), backgroundColor: Colors.red),
       );
     }
+    if (mounted) setState(() => _adding = false);
   }
 }

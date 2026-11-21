@@ -488,6 +488,20 @@ void main() {
     expect(urls, ['http://192.168.1.5:8888'], reason: 'not port 80');
   });
 
+  test('http:// without a port gets the backend port (not with a path)', () async {
+    final urls = <String>[];
+    for (final saved in ['http://192.168.1.5', 'http://nas.local/roomcast', 'https://roomcast.example']) {
+      SharedPreferences.setMockInitialValues({'service_base_url': saved});
+      final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
+        urls.add(url);
+        return _FakeApi(url, reachable: true);
+      });
+      await notifier.loadSaved();
+      notifier.dispose();
+    }
+    expect(urls, ['http://192.168.1.5:8888', 'http://nas.local/roomcast', 'https://roomcast.example']);
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

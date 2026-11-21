@@ -285,8 +285,16 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
     }
   }
 
+  /// Ids with an add request in flight. Kept here, not in the list tile: a
+  /// "Scan again" rebuilds the tiles, and a second add of the same id would
+  /// make the backend replace the output it has just created.
+  final _adding = <String>{};
+
+  bool isAdding(String id) => _adding.contains(id);
+
   /// Pair a discovered device. Returns null on success, else an error message.
   Future<String?> addDevice(DiscoveredDevice discovered, String id) async {
+    if (!_adding.add(id)) return 'it is already being added';
     try {
       final config = discovered.toDeviceConfig(id: id);
       await _client.addDevice(config);
@@ -295,6 +303,8 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
       return e.message;
     } catch (e) {
       return e.toString();
+    } finally {
+      _adding.remove(id);
     }
   }
 }
