@@ -1,8 +1,8 @@
 // Models for Roomcast FM devices.
 
-import 'dart:io';
-
 enum DeviceType { chromecast, dlna, unknown }
+
+final _ipv4 = RegExp(r'^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$');
 
 enum DeviceState { idle, connecting, playing, error, disabled, unknown }
 
@@ -56,8 +56,8 @@ class DiscoveredDevice {
       config['device_name'] = name;
     } else {
       // device_ip must be IPv4 (location_url carries an IPv6 renderer).
-      final address = ip == null ? null : InternetAddress.tryParse(ip!);
-      if (address?.type == InternetAddressType.IPv4) config['device_ip'] = ip;
+      // A plain check: dart:io's InternetAddress isn't available on web.
+      if (ip != null && _ipv4.hasMatch(ip!)) config['device_ip'] = ip;
       if (locationUrl != null) config['location_url'] = locationUrl;
     }
     return config;

@@ -236,6 +236,43 @@ void main() {
     expect(find.textContaining('Could not remove'), findsNothing);
   });
 
+  testWidgets('a request cut off by Disconnect shows no error', (tester) async {
+    // Guard: Riverpod disposes the old device list synchronously when the
+    // connection changes, before the closed client's error arrives.
+    final client = FakeClient(const DevicesSnapshot(streaming: true, devices: [_cast]))
+      ..failVolume = true
+      ..volumeGate = Completer<void>();
+    final connection = StateProvider<int>((ref) => 0);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        devicesProvider.overrideWith((ref) {
+          ref.watch(connection);
+          return DevicesNotifier(client);
+        }),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: Consumer(builder: (context, ref, _) {
+            final snapshot = ref.watch(devicesProvider).valueOrNull;
+            if (snapshot == null) return const SizedBox();
+            return ListView(children: [
+              for (final d in snapshot.devices) DeviceCard(key: ValueKey(d.id), device: d),
+            ]);
+          }),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Slider), const Offset(150, 0)); // setVolume in flight
+    await tester.pump();
+    final container = ProviderScope.containerOf(tester.element(find.byType(Scaffold).first));
+    // Disconnect: the connection changes and the closed client fails the request.
+    container.read(connection.notifier).state++;
+    client.volumeGate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Could not set volume'), findsNothing);
+  });
+
   testWidgets('DLNA device shows the speaker icon', (tester) async {
     await pumpCard(tester, device: const PairedDevice(
       id: 'kef', name: 'KEF', type: DeviceType.dlna, enabled: false,

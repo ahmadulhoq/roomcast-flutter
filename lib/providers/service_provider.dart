@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/mdns_discovery.dart';
 import '../services/api_client.dart';
+import '../services/base_url.dart';
 
 const _prefKey = 'service_base_url';
 
@@ -127,7 +128,9 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   Future<void> loadSaved() async {
     final saved = (await _readPrefs())?.getString(_prefKey);
     if (saved != null) {
-      await connectTo(saved);
+      // Older versions saved what was typed ("http://x:8888/" → "//api/info"
+      // 404s); a successful connect saves the normalized URL.
+      await connectTo(normalizeBaseUrl(saved) ?? saved);
     }
   }
 

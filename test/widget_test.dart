@@ -405,6 +405,19 @@ void main() {
     notifier.dispose();
   });
 
+  test('an address saved by an older version is normalized at launch', () async {
+    SharedPreferences.setMockInitialValues({'service_base_url': 'http://192.168.1.5:8888/'});
+    final urls = <String>[];
+    final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
+      urls.add(url);
+      return _FakeApi(url, reachable: true);
+    });
+    await notifier.loadSaved();
+    expect(urls, ['http://192.168.1.5:8888'], reason: 'with the slash it requested //api/info (404)');
+    expect((await SharedPreferences.getInstance()).getString('service_base_url'), 'http://192.168.1.5:8888');
+    notifier.dispose();
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,
