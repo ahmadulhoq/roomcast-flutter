@@ -180,6 +180,14 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     );
   }
 
+  @override
+  void dispose() {
+    _cancelledUpTo = _attempt; // an attempt finishing later must not connect
+    _connected?.dispose();     // close the live connection's HTTP client
+    _connected = null;
+    super.dispose();
+  }
+
   /// Disconnect and forget the saved address; the next launch doesn't scan
   /// or reconnect on its own either.
   Future<void> disconnect() async {

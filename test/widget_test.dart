@@ -18,12 +18,14 @@ class _ReplaceCounter extends NavigatorObserver {
 }
 
 class _FakeApi extends RoomcastApiClient {
-  _FakeApi(super.baseUrl, {required this.reachable});
+  _FakeApi(super.baseUrl, {required this.reachable, this.gate});
   final bool reachable;
+  final Future<void>? gate; // getInfo waits for it (a slow backend)
   bool disposed = false;
 
   @override
   Future<Map<String, dynamic>> getInfo() async {
+    if (gate != null) await gate;
     if (!reachable) throw ApiException('Network error: unreachable');
     return {'version': '1.0'};
   }
@@ -244,6 +246,75 @@ void main() {
     expect(find.textContaining('Could not reach service at http://typo:8888'), findsOneWidget);
   });
 
+  test('disposing the notifier closes the live connection', () async {
+    SharedPreferences.setMockInitialValues({});
+    final clients = <_FakeApi>[];
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: true)..let(clients.add));
+    await notifier.connectTo('http://192.168.1.20:8888');
+    notifier.dispose();
+    expect(clients.single.disposed, isTrue);
+  });
+
+  testWidgets('the connect screen scrolls instead of overflowing on a small phone',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(320 * 3, 480 * 3);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    SharedPreferences.setMockInitialValues({});
+    final scan = Completer<String?>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() => scan.future),
+          apiClientFactoryProvider.overrideWithValue(
+              (url) => _FakeApi(url, reachable: !url.contains('typo'))),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'typo:8888');
+    await tester.ensureVisible(find.text('Connect'));
+    await tester.tap(find.text('Connect'));
+    await tester.pump(); // scanning, with manual entry and the error box
+    expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
+    expect(find.textContaining('Could not reach service'), findsOneWidget);
+    scan.complete(null);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Connect is disabled while a manual attempt is in flight', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'user_disconnected': true}); // no auto-scan
+    final slow = Completer<void>();
+    var clients = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() async => null),
+          apiClientFactoryProvider.overrideWithValue((url) {
+            clients++;
+            return _FakeApi(url, reachable: false, gate: slow.future);
+          }),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '192.168.1.20:8888');
+    await tester.tap(find.byType(OutlinedButton));
+    await tester.pump();
+    await tester.tap(find.byType(OutlinedButton)); // impatient second tap
+    await tester.pump();
+    expect(clients, 1);
+    expect(tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed, isNull);
+    slow.complete();
+    await tester.pumpAndSettle();
+    expect(tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed, isNotNull);
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,
@@ -363,3 +434,7 @@ void main() {
   });
 }
 
+
+extension _Let<T> on T {
+  void let(void Function(T) f) => f(this);
+}
