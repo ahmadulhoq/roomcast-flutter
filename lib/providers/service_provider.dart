@@ -108,20 +108,25 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     final attempt = ++_attempt;
     _scans.add(attempt);
     if (_connected == null) state = const ServiceState(status: ConnectionState.scanning);
-    String? url;
+    // The scan counts as running until its own connect is done too, so a
+    // manual connect failing meanwhile is shown next to its progress.
     try {
-      url = await _findService();
-    } catch (_) {
-      url = null; // discovery itself broke: same as finding nothing
+      String? url;
+      try {
+        url = await _findService();
+      } catch (_) {
+        url = null; // discovery itself broke: same as finding nothing
+      }
+      if (_isStale(attempt) || _connectedAttempt > 0) return; // cancelled, or already connected
+      if (url == null) {
+        _scans.remove(attempt);
+        _showFailure('No Roomcast FM service found on this network.', withLastError: true);
+        return;
+      }
+      await _connect(url, attempt);
     } finally {
       _scans.remove(attempt);
     }
-    if (_isStale(attempt) || _connectedAttempt > 0) return; // cancelled, or already connected
-    if (url == null) {
-      _showFailure('No Roomcast FM service found on this network.', withLastError: true);
-      return;
-    }
-    await _connect(url, attempt);
   }
 
   /// Connect to a specific base URL (from manual entry or saved pref).
@@ -133,6 +138,7 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
       await client.getInfo();
     } catch (e) {
       client.dispose(); // don't leak the failed attempt's HTTP client
+      _scans.remove(attempt); // a scan's own connect failed: it's over
       if (_isStale(attempt)) return;
       _lastConnectError = 'Could not reach service at $baseUrl: $e';
       _showFailure(_lastConnectError!);

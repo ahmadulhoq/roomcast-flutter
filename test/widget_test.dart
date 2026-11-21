@@ -315,6 +315,48 @@ void main() {
     expect(tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed, isNotNull);
   });
 
+  testWidgets('typed addresses are normalized before connecting', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'user_disconnected': true}); // no auto-scan
+    final urls = <String>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() async => null),
+          apiClientFactoryProvider.overrideWithValue((url) {
+            urls.add(url);
+            return _FakeApi(url, reachable: false);
+          }),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final typed in ['http://192.168.1.5:8888/', 'HTTP://192.168.1.5:8888', 'httpbox.local:8888']) {
+      await tester.enterText(find.byType(TextField), typed);
+      await tester.tap(find.byType(OutlinedButton));
+      await tester.pumpAndSettle();
+    }
+    expect(urls, ['http://192.168.1.5:8888', 'http://192.168.1.5:8888', 'http://httpbox.local:8888']);
+  });
+
+  test('a manual connect failing while the scan checks its find keeps showing the scan', () async {
+    SharedPreferences.setMockInitialValues({});
+    final slowCheck = Completer<void>();
+    final notifier = ServiceNotifier(() async => 'http://192.168.1.20:8888',
+        clientFactory: (url) => url.contains('typo')
+            ? _FakeApi(url, reachable: false)
+            : _FakeApi(url, reachable: true, gate: slowCheck.future));
+    final scanning = notifier.scanAndConnect();
+    await Future<void>.delayed(Duration.zero); // found; its getInfo is in flight
+    await notifier.connectTo('http://typo:8888');
+    expect(notifier.state.status.name, 'scanning', reason: 'the scan is still connecting');
+    expect(notifier.state.errorMessage, contains('typo'));
+    slowCheck.complete();
+    await scanning;
+    expect(notifier.state.isConnected, isTrue);
+    notifier.dispose();
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

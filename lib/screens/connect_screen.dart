@@ -58,10 +58,29 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     }
   }
 
+  /// The base URL for a typed address ("192.168.1.5:8888",
+  /// "HTTP://host:8888/", ...): scheme added if missing, lower-case, no
+  /// path. Null if it isn't an http(s) address.
+  static String? baseUrlFromInput(String raw) {
+    var text = raw.trim();
+    if (text.isEmpty) return null;
+    if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(text)) text = 'http://$text';
+    final uri = Uri.tryParse(text);
+    if (uri == null || uri.host.isEmpty) return null;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+    return Uri(scheme: uri.scheme, host: uri.host, port: uri.hasPort ? uri.port : null)
+        .toString();
+  }
+
   Future<void> _connectManually() async {
-    final raw = _ipController.text.trim();
-    if (raw.isEmpty) return;
-    final url = raw.startsWith('http') ? raw : 'http://$raw';
+    if (_ipController.text.trim().isEmpty) return;
+    final url = baseUrlFromInput(_ipController.text);
+    if (url == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter an address like 192.168.1.5:8888')),
+      );
+      return;
+    }
     _lastWasScan = false;
     setState(() => _connecting = true);
     try {

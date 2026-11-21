@@ -4,9 +4,10 @@
 // (DNS-SD) on iOS, NsdManager on Android. (The macOS build would also need the
 // network-client entitlement and the Bonjour Info.plist keys.) Raw multicast
 // sockets (the multicast_dns package) need Apple's restricted multicast
-// entitlement on iOS 14+ and a WifiManager.MulticastLock on Android; the
-// native APIs need neither — only NSBonjourServices (_roomcast._tcp) and
-// NSLocalNetworkUsageDescription in Info.plist.
+// entitlement on iOS 14+; the native API needs only NSBonjourServices
+// (_roomcast._tcp) and NSLocalNetworkUsageDescription in Info.plist. On
+// Android, bonsoir takes a WifiManager.MulticastLock itself; its own manifest
+// declares CHANGE_WIFI_MULTICAST_STATE (merged into the app's).
 
 import 'dart:async';
 import 'dart:io';
