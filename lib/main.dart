@@ -43,14 +43,19 @@ class _LauncherState extends ConsumerState<_Launcher> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final notifier = ref.read(serviceProvider.notifier);
-      await notifier.loadSaved();
-      // After an explicit Disconnect, don't scan and reconnect by itself.
-      final autoScan = !await notifier.userDisconnected();
-      if (mounted) {
-        setState(() {
-          _checked = true;
-          _autoScan = autoScan;
-        });
+      var autoScan = true;
+      try {
+        await notifier.loadSaved();
+        // After an explicit Disconnect, don't scan and reconnect by itself.
+        autoScan = !await notifier.userDisconnected();
+      } finally {
+        // Whatever happened, leave the launch spinner.
+        if (mounted) {
+          setState(() {
+            _checked = true;
+            _autoScan = autoScan;
+          });
+        }
       }
     });
   }

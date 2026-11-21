@@ -59,12 +59,41 @@ final apiClientFactoryProvider =
     Provider<ApiClientFactory>((ref) => RoomcastApiClient.new);
 
 class ServiceNotifier extends StateNotifier<ServiceState> {
-  ServiceNotifier(this._findService, {ApiClientFactory? clientFactory})
+  ServiceNotifier(this._findService,
+      {ApiClientFactory? clientFactory, Future<SharedPreferences> Function()? preferences})
       : _newClient = clientFactory ?? RoomcastApiClient.new,
+        _preferences = preferences ?? SharedPreferences.getInstance,
         super(const ServiceState(status: ConnectionState.idle));
 
   final ServiceFinder _findService;
   final ApiClientFactory _newClient;
+  final Future<SharedPreferences> Function() _preferences;
+
+  /// Preference writes run one after another, in the order they were
+  /// asked for (a Disconnect's writes can't land after a later connect's),
+  /// and a failing one never breaks connecting or disconnecting.
+  Future<void> _prefsWrites = Future<void>.value();
+
+  Future<void> _writePrefs(Future<void> Function(SharedPreferences prefs) write) {
+    final next = _prefsWrites.then((_) async {
+      try {
+        await write(await _preferences());
+      } catch (_) {
+        // Not saved: the app still works, it just won't remember this.
+      }
+    });
+    _prefsWrites = next;
+    return next;
+  }
+
+  /// A preference read; null if preferences can't be read.
+  Future<SharedPreferences?> _readPrefs() async {
+    try {
+      return await _preferences();
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Why the last connect attempt failed (e.g. the saved address at launch),
   /// kept so a following failed scan doesn't hide it.
@@ -92,12 +121,11 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   /// True if the user disconnected and hasn't connected since.
   Future<bool> userDisconnected() async =>
-      (await SharedPreferences.getInstance()).getBool(_disconnectedKey) ?? false;
+      (await _readPrefs())?.getBool(_disconnectedKey) ?? false;
 
   /// Try to load a previously saved URL, then connect.
   Future<void> loadSaved() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString(_prefKey);
+    final saved = (await _readPrefs())?.getString(_prefKey);
     if (saved != null) {
       await connectTo(saved);
     }
@@ -164,10 +192,11 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     );
     // Close the replaced connection's HTTP client.
     if (previous != null && !identical(previous, client)) previous.dispose();
-    final prefs = await SharedPreferences.getInstance();
-    // Checked before each write: a Disconnect in between must win.
-    if (identical(_connected, client)) await prefs.setString(_prefKey, baseUrl);
-    if (identical(_connected, client)) await prefs.remove(_disconnectedKey);
+    await _writePrefs((prefs) async {
+      // Checked when the write runs: a Disconnect since must win.
+      if (identical(_connected, client)) await prefs.setString(_prefKey, baseUrl);
+      if (identical(_connected, client)) await prefs.remove(_disconnectedKey);
+    });
   }
 
   /// Show a failure. With a working connection nothing changes (the state
@@ -206,9 +235,10 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     _connected = null;
     _connectedAttempt = 0;
     state = const ServiceState(status: ConnectionState.idle);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefKey);
-    await prefs.setBool(_disconnectedKey, true);
+    await _writePrefs((prefs) async {
+      await prefs.remove(_prefKey);
+      await prefs.setBool(_disconnectedKey, true);
+    });
   }
 }
 

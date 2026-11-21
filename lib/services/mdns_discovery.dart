@@ -17,6 +17,7 @@ import 'package:bonsoir/bonsoir.dart';
 const serviceType = '_roomcast._tcp';
 const _scanTimeout = Duration(seconds: 8);
 const _stopTimeout = Duration(seconds: 2);
+const _resolveTimeout = Duration(seconds: 3);
 
 class ServiceDiscovery {
   /// Scan the local network for a Roomcast FM backend.
@@ -24,7 +25,8 @@ class ServiceDiscovery {
   /// Returns the base URL (http://ip:port) of the first service found,
   /// or null if none is found within [timeout] (which covers the whole scan,
   /// a platform call that never answers included) or discovery fails.
-  static Future<String?> findService({Duration timeout = _scanTimeout}) async {
+  static Future<String?> findService(
+      {Duration timeout = _scanTimeout, Duration resolveTimeout = _resolveTimeout}) async {
     final discovery = BonsoirDiscovery(type: serviceType);
     final found = Completer<String?>();
     final tracker = ResolveTracker();
@@ -38,9 +40,15 @@ class ServiceDiscovery {
       if (done || found.isCompleted) return;
       final service = tracker.next();
       if (service == null) return;
+      final token = tracker.token;
       unawaited(discovery.serviceResolver
           .resolveService(service)
           .catchError((Object _) => onResolveFailed()));
+      // A resolve that never reports back (iOS resolves have no timeout of
+      // their own, e.g. a stale cached instance) must not block the others.
+      Future<void>.delayed(resolveTimeout, () {
+        if (!done && tracker.isInFlight(token)) onResolveFailed();
+      });
     }
 
     void handleResolved(BonsoirService service) {
@@ -118,10 +126,14 @@ class ServiceDiscovery {
       return null; // no service / discovery unavailable — caller shows manual entry
     } finally {
       done = true;
-      await subscription?.cancel();
-      try {
-        await discovery.stop().timeout(_stopTimeout);
-      } catch (_) {}
+      // Not awaited: the result (often a URL to connect to) shouldn't wait
+      // for the platform to stop browsing.
+      unawaited(() async {
+        await subscription?.cancel();
+        try {
+          await discovery.stop().timeout(_stopTimeout);
+        } catch (_) {}
+      }());
     }
   }
 
@@ -169,6 +181,13 @@ class ResolveTracker {
   /// True while a resolve started by [next] hasn't finished.
   bool get resolving => _inFlight != null;
 
+  /// Identifies the resolve [next] started last.
+  int get token => _token;
+  int _token = 0;
+
+  /// True if the resolve identified by [token] is still in flight.
+  bool isInFlight(int token) => _inFlight != null && _token == token;
+
   /// True once any service has been found, even if it was lost again:
   /// discovery itself works, so a later error isn't fatal.
   bool get everFound => _everFound;
@@ -188,6 +207,7 @@ class ResolveTracker {
     if (_inFlight != null || _queue.isEmpty) return null;
     final service = _queue.removeAt(0);
     _attempts[service.name] = _attempts[service.name]! + 1;
+    _token++;
     return _inFlight = service;
   }
 

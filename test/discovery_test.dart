@@ -171,6 +171,29 @@ void main() {
     expect(await ServiceDiscovery.findService(timeout: const Duration(seconds: 2)), 'http://192.168.1.23:8888');
   });
 
+  test('a resolve that never reports back does not block the next service', () async {
+    action.onStart = () {
+      action.emit(BonsoirDiscoveryServiceFoundEvent(service: svc('stale cached instance')));
+      action.emit(BonsoirDiscoveryServiceFoundEvent(service: svc('Roomcast FM')));
+    };
+    action.onResolve = (s) {
+      if (s.name == 'Roomcast FM') {
+        action.emit(BonsoirDiscoveryServiceResolvedEvent(service: svc(s.name, host: '192.168.1.24')));
+      } // the stale one never answers
+    };
+    expect(await ServiceDiscovery.findService(timeout: const Duration(seconds: 6)), 'http://192.168.1.24:8888');
+  });
+
+  test('the URL is returned without waiting for discovery to stop', () async {
+    action.hangStop = true;
+    action.onStart = () => action.emit(BonsoirDiscoveryServiceFoundEvent(service: svc('Roomcast FM')));
+    action.onResolve = (s) =>
+        action.emit(BonsoirDiscoveryServiceResolvedEvent(service: svc(s.name, host: '192.168.1.25')));
+    final started = DateTime.now();
+    expect(await ServiceDiscovery.findService(timeout: const Duration(seconds: 5)), 'http://192.168.1.25:8888');
+    expect(DateTime.now().difference(started), lessThan(const Duration(seconds: 1)));
+  });
+
   test('an error before anything is found ends the scan at once', () async {
     action.onStart = () => action.error(); // e.g. local-network permission denied
     final started = DateTime.now();

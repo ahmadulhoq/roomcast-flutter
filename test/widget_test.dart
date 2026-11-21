@@ -369,6 +369,42 @@ void main() {
     notifier.dispose();
   });
 
+  test('preferences that fail to load or save never break connecting', () async {
+    SharedPreferences.setMockInitialValues({});
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: true),
+        preferences: () async => throw StateError('prefs unavailable'));
+    await notifier.loadSaved();                         // no throw
+    expect(await notifier.userDisconnected(), isFalse);
+    await notifier.connectTo('http://192.168.1.20:8888');
+    expect(notifier.state.isConnected, isTrue);
+    await notifier.disconnect();                        // no throw
+    notifier.dispose();
+  });
+
+  test("a Disconnect's preference writes can't land after a later connect's", () async {
+    SharedPreferences.setMockInitialValues({});
+    final slowFirst = Completer<void>();
+    var loads = 0;
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: true),
+        preferences: () async {
+          if (++loads == 1) await slowFirst.future; // the first write is slow
+          return SharedPreferences.getInstance();
+        });
+    final a = notifier.connectTo('http://192.168.1.20:8888');
+    await Future<void>.delayed(Duration.zero);
+    final d = notifier.disconnect();
+    final b = notifier.connectTo('http://192.168.1.21:8888');
+    await Future<void>.delayed(Duration.zero);
+    slowFirst.complete();
+    await Future.wait([a, d, b]);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('service_base_url'), 'http://192.168.1.21:8888');
+    expect(prefs.getBool('user_disconnected'), isNull);
+    notifier.dispose();
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,
