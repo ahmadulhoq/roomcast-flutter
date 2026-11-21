@@ -197,7 +197,9 @@ final devicesProvider = StateNotifierProvider<DevicesNotifier,
   final serviceState = ref.watch(serviceProvider);
   final client = serviceState.client;
   if (client == null) {
-    return DevicesNotifier(_NullClient());
+    final placeholder = _NullClient();
+    ref.onDispose(placeholder.dispose); // it owns an http.Client too
+    return DevicesNotifier(placeholder);
   }
   return DevicesNotifier(client, pollInterval: ref.watch(devicesPollIntervalProvider));
 });
@@ -240,7 +242,9 @@ final scanProvider = StateNotifierProvider<ScanNotifier,
   final serviceState = ref.watch(serviceProvider);
   final client = serviceState.client;
   if (client == null) {
-    return ScanNotifier(_NullClient());
+    final placeholder = _NullClient();
+    ref.onDispose(placeholder.dispose);
+    return ScanNotifier(placeholder);
   }
   return ScanNotifier(client);
 });

@@ -27,23 +27,35 @@ class ServiceDiscovery {
     final tracker = ResolveTracker();
     var done = false;
     StreamSubscription<BonsoirDiscoveryEvent>? subscription;
-    late final void Function(BonsoirService) resolve;
+    late final void Function() onResolveFailed;
 
-    void retryFailedResolves() {
+    // Resolve one service at a time (Android NSD before API 34 allows only
+    // one), so a failure can be attributed to the service being resolved.
+    void pump() {
       if (done || found.isCompleted) return;
-      for (final service in tracker.retries()) {
-        Future<void>.delayed(const Duration(milliseconds: 300), () {
-          if (!done && !found.isCompleted) resolve(service);
-        });
+      final service = tracker.next();
+      if (service == null) return;
+      unawaited(discovery.serviceResolver
+          .resolveService(service)
+          .catchError((Object _) => onResolveFailed()));
+    }
+
+    void handleResolved(BonsoirService service) {
+      tracker.resolved(service);
+      final url = baseUrlFor(service);
+      if (url != null && !found.isCompleted) {
+        found.complete(url);
+      } else {
+        pump();
       }
     }
 
-    // Errors here (e.g. Android NSD busy: FAILURE_ALREADY_ACTIVE) are retried,
-    // never surfaced as uncaught async errors.
-    resolve = (BonsoirService service) {
-      unawaited(discovery.serviceResolver
-          .resolveService(service)
-          .catchError((Object _) => retryFailedResolves()));
+    // One failure can be reported twice (an exception and an event); the
+    // delay lets the second report find nothing in flight.
+    onResolveFailed = () {
+      if (done) return;
+      tracker.failed();
+      Future<void>.delayed(const Duration(milliseconds: 300), pump);
     };
 
     try {
@@ -52,21 +64,32 @@ class ServiceDiscovery {
         (event) {
           switch (event) {
             case BonsoirDiscoveryServiceFoundEvent():
-              if (tracker.found(event.service)) resolve(event.service);
+              tracker.found(event.service);
+              pump();
             case BonsoirDiscoveryServiceResolvedEvent():
-              tracker.resolved(event.service);
-              final url = baseUrlFor(event.service);
-              if (url != null && !found.isCompleted) found.complete(url);
+              handleResolved(event.service);
+            case BonsoirDiscoveryServiceUpdatedEvent():
+              // e.g. TXT attributes (the backend's "ip") arriving after resolve
+              handleResolved(event.service);
             case BonsoirDiscoveryServiceResolveFailedEvent():
-              retryFailedResolves();
+              onResolveFailed();
+            case BonsoirDiscoveryServiceLostEvent():
+              tracker.lost(event.service);
+              pump();
             default:
               break;
           }
         },
-        // Discovery itself failed (e.g. local-network permission denied):
-        // stop waiting and let the caller offer manual entry.
+        // bonsoir reports fatal discovery errors and per-service resolve
+        // problems the same way (code "discoveryError"). While a resolve is
+        // in flight treat it as that resolve failing; otherwise discovery
+        // itself failed (e.g. permission denied): stop and offer manual entry.
         onError: (Object _) {
-          if (!found.isCompleted) found.complete(null);
+          if (tracker.resolving) {
+            onResolveFailed();
+          } else if (!found.isCompleted) {
+            found.complete(null);
+          }
         },
       );
       await discovery.start();
@@ -108,36 +131,55 @@ class ServiceDiscovery {
       !a.isLoopback && !a.isMulticast && a.address != '0.0.0.0' && a.address != '::';
 }
 
-/// Decides which discovered services to resolve, and which to retry after a
-/// failed resolve. Android NSD (before API 34) allows only one resolve at a
-/// time and fails others with FAILURE_ALREADY_ACTIVE.
+/// Decides which discovered service to resolve next. Resolves run one at a
+/// time; a failed one is retried (up to [maxAttempts]) after the others
+/// waiting in the queue. Android NSD before API 34 allows only one resolve at
+/// a time and fails others with FAILURE_ALREADY_ACTIVE.
 class ResolveTracker {
   ResolveTracker({this.maxAttempts = 3});
 
   final int maxAttempts;
   final _attempts = <String, int>{};
-  final _unresolved = <String, BonsoirService>{};
+  final _queue = <BonsoirService>[];
+  BonsoirService? _inFlight;
 
-  /// A service was found: true if it should be resolved now (first sighting).
-  bool found(BonsoirService service) {
-    if (_attempts.containsKey(service.name)) return false;
-    _attempts[service.name] = 1;
-    _unresolved[service.name] = service;
-    return true;
+  /// True while a resolve started by [next] hasn't finished.
+  bool get resolving => _inFlight != null;
+
+  /// A service was found: queue it (once; a re-announce of a known service
+  /// is ignored until it is lost).
+  void found(BonsoirService service) {
+    if (_attempts.containsKey(service.name)) return;
+    _attempts[service.name] = 0;
+    _queue.add(service);
   }
 
-  void resolved(BonsoirService service) => _unresolved.remove(service.name);
+  /// The next service to resolve, or null if one is in flight or none waits.
+  BonsoirService? next() {
+    if (_inFlight != null || _queue.isEmpty) return null;
+    final service = _queue.removeAt(0);
+    _attempts[service.name] = _attempts[service.name]! + 1;
+    return _inFlight = service;
+  }
 
-  /// After a failed resolve: the unresolved services with attempts left.
-  List<BonsoirService> retries() {
-    final result = <BonsoirService>[];
-    for (final entry in _unresolved.entries) {
-      final attempts = _attempts[entry.key]!;
-      if (attempts < maxAttempts) {
-        _attempts[entry.key] = attempts + 1;
-        result.add(entry.value);
-      }
-    }
-    return result;
+  void resolved(BonsoirService service) {
+    if (_inFlight?.name == service.name) _inFlight = null;
+    _queue.removeWhere((s) => s.name == service.name);
+  }
+
+  /// The in-flight resolve failed: re-queue it if it has attempts left.
+  /// A no-op if nothing is in flight (e.g. a second report of one failure).
+  void failed() {
+    final service = _inFlight;
+    if (service == null) return;
+    _inFlight = null;
+    if (_attempts[service.name]! < maxAttempts) _queue.add(service);
+  }
+
+  /// The service went away: forget it (a later re-announce starts afresh).
+  void lost(BonsoirService service) {
+    _queue.removeWhere((s) => s.name == service.name);
+    if (_inFlight?.name == service.name) _inFlight = null;
+    _attempts.remove(service.name);
   }
 }

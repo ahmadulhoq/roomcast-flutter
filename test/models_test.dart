@@ -8,20 +8,40 @@ void main() {
     BonsoirService s(String name) =>
         BonsoirService.ignoreNorms(name: name, type: serviceType, port: 8888);
 
-    test('resolves each service once, retries failures up to maxAttempts', () {
-      final tracker = ResolveTracker(maxAttempts: 3);
-      expect(tracker.found(s('Roomcast FM')), isTrue);
-      expect(tracker.found(s('Roomcast FM')), isFalse, reason: 'seen again: not re-resolved');
-      expect(tracker.retries().map((x) => x.name), ['Roomcast FM']); // attempt 2
-      expect(tracker.retries().map((x) => x.name), ['Roomcast FM']); // attempt 3
-      expect(tracker.retries(), isEmpty, reason: 'attempts exhausted');
+    test('resolves one service at a time, in order', () {
+      final t = ResolveTracker();
+      t.found(s('A'));
+      t.found(s('B'));
+      t.found(s('A')); // re-announce: ignored
+      expect(t.next()?.name, 'A');
+      expect(t.next(), isNull, reason: 'A is still in flight');
+      t.resolved(s('A'));
+      expect(t.next()?.name, 'B');
     });
 
-    test('resolved services are not retried', () {
-      final tracker = ResolveTracker();
-      tracker.found(s('Roomcast FM'));
-      tracker.resolved(s('Roomcast FM'));
-      expect(tracker.retries(), isEmpty);
+    test('a failure retries only the failed service, after the others', () {
+      final t = ResolveTracker(maxAttempts: 2);
+      t.found(s('A'));
+      t.found(s('B'));
+      expect(t.next()?.name, 'A');
+      t.failed();                      // A: attempt 1 failed → re-queued behind B
+      t.failed();                      // second report of the same failure: no-op
+      expect(t.next()?.name, 'B');
+      t.resolved(s('B'));
+      expect(t.next()?.name, 'A');     // A: attempt 2
+      t.failed();
+      expect(t.next(), isNull, reason: 'A has no attempts left; B kept its own');
+    });
+
+    test('a lost service is forgotten and can be found again', () {
+      final t = ResolveTracker();
+      t.found(s('A'));
+      expect(t.next()?.name, 'A');
+      t.lost(s('A'));
+      expect(t.resolving, isFalse);
+      expect(t.next(), isNull);
+      t.found(s('A'));
+      expect(t.next()?.name, 'A');
     });
   });
 

@@ -6,7 +6,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:roomcast_fm/main.dart';
 import 'package:roomcast_fm/providers/service_provider.dart';
+import 'package:roomcast_fm/screens/connect_screen.dart';
 import 'package:roomcast_fm/services/api_client.dart';
+
+class _ReplaceCounter extends NavigatorObserver {
+  int replacements = 0;
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) => replacements++;
+}
 
 class _FakeApi extends RoomcastApiClient {
   _FakeApi(super.baseUrl, {required this.reachable});
@@ -88,6 +96,81 @@ void main() {
     expect(made[1].disposed, isTrue, reason: 'replaced connection closed');
     expect(made[2].disposed, isFalse, reason: 'current connection kept');
     notifier.dispose();
+  });
+
+  test('a manual connect made during a scan wins over the scan result', () async {
+    SharedPreferences.setMockInitialValues({});
+    final scan = Completer<String?>();
+    final made = <_FakeApi>[];
+    final notifier = ServiceNotifier(() => scan.future, clientFactory: (url) {
+      final c = _FakeApi(url, reachable: true);
+      made.add(c);
+      return c;
+    });
+    final scanning = notifier.scanAndConnect();
+    await notifier.connectTo('http://manual:8888');
+    expect(notifier.state.baseUrl, 'http://manual:8888');
+    scan.complete('http://scanned:8888');
+    await scanning;
+    expect(notifier.state.isConnected, isTrue);
+    expect(notifier.state.baseUrl, 'http://manual:8888', reason: 'scan result dropped');
+    expect(made.map((c) => c.baseUrl), ['http://manual:8888'], reason: 'no client for the stale result');
+    notifier.dispose();
+  });
+
+  test('a scan that finds nothing does not drop a manual connection', () async {
+    SharedPreferences.setMockInitialValues({});
+    final scan = Completer<String?>();
+    final notifier = ServiceNotifier(() => scan.future,
+        clientFactory: (url) => _FakeApi(url, reachable: true));
+    final scanning = notifier.scanAndConnect();
+    await notifier.connectTo('http://manual:8888');
+    scan.complete(null);
+    await scanning;
+    expect(notifier.state.isConnected, isTrue);
+    notifier.dispose();
+  });
+
+  test('a failed connect keeps the working connection', () async {
+    SharedPreferences.setMockInitialValues({});
+    final made = <_FakeApi>[];
+    final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
+      final c = _FakeApi(url, reachable: !url.contains('bad'));
+      made.add(c);
+      return c;
+    });
+    await notifier.connectTo('http://good:8888');
+    await notifier.connectTo('http://bad:8888');
+    expect(notifier.state.isConnected, isTrue);
+    expect(notifier.state.baseUrl, 'http://good:8888');
+    expect(made.first.disposed, isFalse, reason: 'working client kept open');
+    expect(made.last.disposed, isTrue);
+    notifier.dispose();
+  });
+
+  testWidgets('two quick successful connects open the home screen once', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final observer = _ReplaceCounter();
+    late ServiceNotifier notifier;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceProvider.overrideWith((ref) {
+            return notifier = ServiceNotifier(() => Completer<String?>().future,
+                clientFactory: (url) => _FakeApi(url, reachable: true));
+          }),
+        ],
+        child: MaterialApp(
+          navigatorObservers: [observer],
+          home: const ConnectScreen(autoScan: false),
+        ),
+      ),
+    );
+    await notifier.connectTo('http://a:8888');
+    await notifier.connectTo('http://b:8888'); // connected → connected
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(observer.replacements, 1);
   });
 
   testWidgets('an unreachable saved address stays visible after a failed auto-scan',

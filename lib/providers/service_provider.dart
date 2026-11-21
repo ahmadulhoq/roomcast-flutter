@@ -66,6 +66,14 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   /// kept so a following failed scan doesn't hide it.
   String? _lastConnectError;
 
+  /// Incremented by every scan, connect and disconnect: only the newest
+  /// attempt may change the state, so a manual connect made while an
+  /// auto-scan runs isn't overwritten when the scan finishes.
+  int _attempt = 0;
+
+  /// The working connection, if any. A failed attempt never drops it.
+  RoomcastApiClient? _connected;
+
   /// Try to load a previously saved URL, then connect.
   Future<void> loadSaved() async {
     final prefs = await SharedPreferences.getInstance();
@@ -77,30 +85,33 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   /// Scan mDNS for the backend, then connect.
   Future<void> scanAndConnect() async {
+    final attempt = ++_attempt;
     state = const ServiceState(status: ConnectionState.scanning);
     final url = await _findService();
+    if (!mounted || attempt != _attempt) return; // superseded (e.g. manual connect)
     if (url == null) {
-      state = ServiceState(
-        status: ConnectionState.error,
-        errorMessage: [
-          'No Roomcast FM service found on this network.',
-          ?_lastConnectError,
-        ].join('\n'),
-      );
+      _showFailure('No Roomcast FM service found on this network.', withLastError: true);
       return;
     }
-    await connectTo(url);
+    await _connect(url, attempt);
   }
 
   /// Connect to a specific base URL (from manual entry or saved pref).
-  Future<void> connectTo(String baseUrl) async {
+  Future<void> connectTo(String baseUrl) => _connect(baseUrl, ++_attempt);
+
+  Future<void> _connect(String baseUrl, int attempt) async {
     final client = _newClient(baseUrl);
     try {
       await client.getInfo();
+      if (!mounted || attempt != _attempt) {
+        client.dispose(); // a newer attempt won
+        return;
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefKey, baseUrl);
       _lastConnectError = null;
-      final previous = state.client;
+      final previous = _connected;
+      _connected = client;
       state = ServiceState(
         status: ConnectionState.connected,
         baseUrl: baseUrl,
@@ -110,16 +121,36 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
       if (previous != null && !identical(previous, client)) previous.dispose();
     } catch (e) {
       client.dispose(); // don't leak the failed attempt's HTTP client
+      if (!mounted || attempt != _attempt) return;
       _lastConnectError = 'Could not reach service at $baseUrl: $e';
-      state = ServiceState(
-        status: ConnectionState.error,
-        errorMessage: _lastConnectError,
-      );
+      _showFailure(_lastConnectError!);
     }
   }
 
+  /// Show a failure, unless a working connection exists: then keep it.
+  void _showFailure(String message, {bool withLastError = false}) {
+    final connected = _connected;
+    if (connected != null) {
+      state = ServiceState(
+        status: ConnectionState.connected,
+        baseUrl: connected.baseUrl,
+        client: connected,
+      );
+      return;
+    }
+    state = ServiceState(
+      status: ConnectionState.error,
+      errorMessage: [
+        message,
+        if (withLastError && _lastConnectError != message) ?_lastConnectError,
+      ].join('\n'),
+    );
+  }
+
   void disconnect() {
-    state.client?.dispose();
+    _attempt++; // a scan/connect still in flight must not reconnect
+    _connected?.dispose();
+    _connected = null;
     state = const ServiceState(status: ConnectionState.idle);
   }
 }

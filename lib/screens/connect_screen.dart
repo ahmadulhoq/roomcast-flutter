@@ -16,6 +16,7 @@ class ConnectScreen extends ConsumerStatefulWidget {
 
 class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _ipController = TextEditingController();
+  bool _navigated = false;
 
   @override
   void initState() {
@@ -41,9 +42,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   Widget build(BuildContext context) {
     final serviceState = ref.watch(sp.serviceProvider);
 
-    // Navigate to home once connected
-    ref.listen<sp.ServiceState>(sp.serviceProvider, (_, next) {
-      if (next.isConnected) {
+    // Navigate to home once connected — once, even if two attempts succeed
+    // close together (the route is still listening while it animates out).
+    ref.listen<sp.ServiceState>(sp.serviceProvider, (previous, next) {
+      if (next.isConnected && !(previous?.isConnected ?? false) && !_navigated) {
+        _navigated = true;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const HomeScreen()),
         );
