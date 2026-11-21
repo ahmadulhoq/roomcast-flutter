@@ -61,28 +61,7 @@ class HomeScreen extends ConsumerWidget {
             child: devicesAsync.when(
               skipError: true, // error view only when there is no list to show
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                    const SizedBox(height: 12),
-                    Text('Failed to load devices: $e',
-                        textAlign: TextAlign.center),
-                    const SizedBox(height: 16),
-                    // A retry keeps the error state (it reloads over it), so
-                    // show its progress here.
-                    if (devicesAsync.isLoading)
-                      const CircularProgressIndicator()
-                    else
-                      FilledButton(
-                        onPressed: () =>
-                            ref.read(devicesProvider.notifier).refresh(),
-                        child: const Text('Retry'),
-                      ),
-                  ],
-                ),
-              ),
+              error: (e, _) => _LoadErrorView(error: e),
               data: (snapshot) => snapshot.devices.isEmpty
                   ? Center(
                       child: Column(
@@ -197,6 +176,50 @@ class _ServiceStatusBar extends StatelessWidget {
                   ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The full-screen error when no list could be loaded yet.
+class _LoadErrorView extends ConsumerStatefulWidget {
+  final Object error;
+
+  const _LoadErrorView({required this.error});
+
+  @override
+  ConsumerState<_LoadErrorView> createState() => _LoadErrorViewState();
+}
+
+class _LoadErrorViewState extends ConsumerState<_LoadErrorView> {
+  /// The user's own retry is running. (Background polls also reload over the
+  /// error; they don't turn the button into a spinner.)
+  bool _retrying = false;
+
+  Future<void> _retry() async {
+    setState(() => _retrying = true);
+    try {
+      await ref.read(devicesProvider.notifier).refresh();
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, size: 48, color: Colors.red),
+          const SizedBox(height: 12),
+          Text('Failed to load devices: ${widget.error}', textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+          if (_retrying)
+            const CircularProgressIndicator()
+          else
+            FilledButton(onPressed: _retry, child: const Text('Retry')),
         ],
       ),
     );

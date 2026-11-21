@@ -23,6 +23,7 @@ class SlowClient extends RoomcastApiClient {
 
   final pending = <Completer<DevicesSnapshot>>[];
   final volumeCalls = <Completer<void>>[];
+  final volumeLevels = <int>[];
   bool failEnable = false;
   bool failRemove = false;
 
@@ -47,6 +48,7 @@ class SlowClient extends RoomcastApiClient {
   Future<void> setVolume(String id, int level) {
     final c = Completer<void>();
     volumeCalls.add(c);
+    volumeLevels.add(level);
     return c.future;
   }
 }
@@ -133,7 +135,7 @@ void main() {
     notifier.dispose();
   });
 
-  testWidgets('an earlier failed change does not undo a later one', (tester) async {
+  testWidgets('an earlier failed change does not undo a later one, and reports nothing', (tester) async {
     final client = SlowClient();
     final notifier = DevicesNotifier(client);
     client.pending[0].complete(snap({'cast': 50}));
@@ -141,11 +143,31 @@ void main() {
 
     final first = notifier.setVolume('cast', 80);
     final second = notifier.setVolume('cast', 30);
+    client.volumeCalls[0].completeError(ApiException('timeout'));
+    await first; // superseded by the 30: its failure doesn't matter (no snackbar)
+    await tester.pump();
     client.volumeCalls[1].complete();
     await second;
-    client.volumeCalls[0].completeError(ApiException('timeout'));
-    await expectLater(first, throwsA(isA<ApiException>()));
     expect(volumeOf(notifier, 'cast'), 30);
+    notifier.dispose();
+  });
+
+  testWidgets('volume requests for one device go out one at a time, in order', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 40);
+    final second = notifier.setVolume('cast', 80);
+    await tester.pump();
+    expect(client.volumeLevels, [40], reason: 'the 80 waits: on another connection it could arrive first');
+    client.volumeCalls[0].complete();
+    await first;
+    await tester.pump();
+    expect(client.volumeLevels, [40, 80]);
+    client.volumeCalls[1].complete();
+    await second;
     notifier.dispose();
   });
 
@@ -169,21 +191,21 @@ void main() {
     notifier.dispose();
   });
 
-  testWidgets('a failed change while an earlier one is in flight falls back to that one', (tester) async {
+  testWidgets('a failed change falls back to the one before it, accepted but not reported yet', (tester) async {
     final client = SlowClient();
     final notifier = DevicesNotifier(client);
     client.pending[0].complete(snap({'cast': 10}));
     await tester.pump();
 
     final first = notifier.setVolume('cast', 30);
-    final second = notifier.setVolume('cast', 60);
-    client.volumeCalls[1].completeError(ApiException('timeout'));
-    await expectLater(second, throwsA(isA<ApiException>()));
-    expect(volumeOf(notifier, 'cast'), 30, reason: 'the 30 may still land; not the stale 10');
+    final second = notifier.setVolume('cast', 60); // queued behind the 30
     client.volumeCalls[0].complete();
     await first;
-    // The re-sync refresh started before the 30 landed: it must not undo it.
-    client.pending.last.complete(snap({'cast': 10}));
+    await tester.pump();
+    client.volumeCalls[1].completeError(ApiException('timeout'));
+    await expectLater(second, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 30, reason: 'the server has 30; not the stale 10');
+    client.pending.last.complete(snap({'cast': 30}));
     await tester.pump();
     expect(volumeOf(notifier, 'cast'), 30);
     notifier.dispose();
@@ -198,7 +220,8 @@ void main() {
     final first = notifier.setVolume('cast', 30);
     final second = notifier.setVolume('cast', 60);
     client.volumeCalls[0].completeError(ApiException('speaker offline'));
-    await expectLater(first, throwsA(isA<ApiException>()));
+    await first; // superseded: no error of its own
+    await tester.pump();
     client.volumeCalls[1].completeError(ApiException('speaker offline'));
     await expectLater(second, throwsA(isA<ApiException>()));
     expect(volumeOf(notifier, 'cast'), 50, reason: 'not the failed 30');
@@ -352,6 +375,23 @@ void main() {
     client.pending[0].completeError(ApiException('Network error: unreachable'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Failed to load devices'), findsOneWidget);
+  });
+
+  testWidgets('background polls do not turn Retry into a spinner', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        devicesProvider.overrideWith((ref) => DevicesNotifier(client, pollInterval: const Duration(seconds: 5))),
+      ],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].completeError(ApiException('Network error: unreachable'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5)); // a poll is in flight now
+    expect(client.pending.length, 2);
+    expect(find.text('Retry'), findsOneWidget);
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pump();
   });
 
   testWidgets('Retry on the error view shows that it is retrying', (tester) async {

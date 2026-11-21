@@ -357,6 +357,18 @@ void main() {
     notifier.dispose();
   });
 
+  test('a failed attempt while connected is not shown later as the reason', () async {
+    SharedPreferences.setMockInitialValues({});
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: !url.contains('typo')));
+    await notifier.connectTo('http://192.168.1.20:8888');
+    await notifier.connectTo('http://typo:8888'); // fails; the connection stays
+    await notifier.disconnect();
+    await notifier.scanAndConnect(); // finds nothing
+    expect(notifier.state.errorMessage, isNot(contains('typo')));
+    notifier.dispose();
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

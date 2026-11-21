@@ -77,7 +77,7 @@ void main() {
           {'id': 'x', 'name': 'X', 'state': 'IDLE', 'volume': 10},
         ],
       });
-      expect(snapshot.streaming, isFalse);
+      expect(snapshot.streaming, isNull, reason: 'unknown, so no "Idle" badge');
       expect(snapshot.devices.single.type, DeviceType.unknown);
       expect(snapshot.devices.single.enabled, isTrue);
     });

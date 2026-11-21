@@ -140,8 +140,11 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
       client.dispose(); // don't leak the failed attempt's HTTP client
       _scans.remove(attempt); // a scan's own connect failed: it's over
       if (_isStale(attempt)) return;
-      _lastConnectError = 'Could not reach service at $baseUrl: $e';
-      _showFailure(_lastConnectError!);
+      final message = 'Could not reach service at $baseUrl: $e';
+      // Kept to show with a later failed scan, but only if it's why there is
+      // no connection (not a failed attempt while connected).
+      if (_connected == null) _lastConnectError = message;
+      _showFailure(message);
       return;
     }
     // No await between this check and the switch below, so a newer attempt
@@ -198,6 +201,7 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   /// or reconnect on its own either.
   Future<void> disconnect() async {
     _cancelledUpTo = _attempt; // a scan/connect still in flight must not reconnect
+    _lastConnectError = null;
     _connected?.dispose();
     _connected = null;
     _connectedAttempt = 0;

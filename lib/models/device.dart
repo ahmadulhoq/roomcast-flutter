@@ -131,18 +131,19 @@ class PairedDevice {
 
 /// Paired devices plus whether the backend is streaming audio right now.
 class DevicesSnapshot {
-  final bool streaming;
+  /// Null if the backend doesn't report it (older versions): not "Idle".
+  final bool? streaming;
   final List<PairedDevice> devices;
 
   const DevicesSnapshot({required this.streaming, required this.devices});
 
-  static const empty = DevicesSnapshot(streaming: false, devices: []);
+  static const empty = DevicesSnapshot(streaming: null, devices: []);
 
   factory DevicesSnapshot.fromJson(Map<String, dynamic> json) {
     final encoder = json['encoder'] as Map<String, dynamic>? ?? const {};
     final outputs = json['outputs'] as List<dynamic>? ?? const [];
     return DevicesSnapshot(
-      streaming: encoder['streaming'] as bool? ?? false,
+      streaming: encoder['streaming'] as bool?,
       devices: outputs.cast<Map<String, dynamic>>().map(PairedDevice.fromJson).toList(),
     );
   }

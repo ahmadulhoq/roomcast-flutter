@@ -100,6 +100,25 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// Volume changes shown on top of [_server] until the server reports them.
   final _pendingVolumes = <String, _PendingVolume>{};
 
+  /// The last volume request sent per device: the next one waits for it, so
+  /// the server gets them in order (separate connections could swap them,
+  /// and the server applies the one that arrives last).
+  final _volumeSends = <String, Future<void>>{};
+
+  Future<void> _sendVolume(String id, int level) {
+    final previous = _volumeSends[id];
+    final send = previous == null
+        ? _client.setVolume(id, level) // nothing in flight: send now
+        : previous
+            .then<void>((_) {}, onError: (Object _) {}) // its failure went to its own caller
+            .then((_) => _client.setVolume(id, level));
+    _volumeSends[id] = send;
+    unawaited(send.then<void>((_) {}, onError: (Object _) {}).whenComplete(() {
+      if (identical(_volumeSends[id], send)) _volumeSends.remove(id);
+    }));
+    return send;
+  }
+
   /// Background poll: skipped while a refresh is still running, so a slow or
   /// unreachable backend (requests time out after 10 s) can't stack requests
   /// that each invalidate the previous one's result.
@@ -150,29 +169,29 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// the server reports it. On failure (unless a newer change was made) the
   /// change before it is shown again — still in flight or accepted but not
   /// reported yet — else the server's own level, and the list is re-synced.
-  /// Throws [ApiException] on failure.
+  /// Throws [ApiException] on failure, unless a newer change of this device
+  /// already replaced this one (its failure doesn't matter any more).
   Future<void> setVolume(String id, int level) async {
     final pending = _PendingVolume(level, _pendingVolumes[id]);
     _pendingVolumes[id] = pending;
     _showLocal();
     try {
-      await _client.setVolume(id, level);
+      await _sendVolume(id, level);
       // Recorded even if a newer change replaced this one: should that one
       // fail, this level is what the server has.
       pending.confirmedAtSeq = _requestSeq;
       pending.previous = null;
     } catch (_) {
       pending.failed = true; // never shown again, even as a fallback
-      if (identical(_pendingVolumes[id], pending)) {
-        final fallback = pending.fallback;
-        if (fallback != null) {
-          _pendingVolumes[id] = fallback; // its own outcome then decides
-        } else {
-          _pendingVolumes.remove(id);
-        }
-        _showLocal();
-        unawaited(refresh());
+      if (!identical(_pendingVolumes[id], pending)) return; // superseded: no error to show
+      final fallback = pending.fallback;
+      if (fallback != null) {
+        _pendingVolumes[id] = fallback; // its own outcome then decides
+      } else {
+        _pendingVolumes.remove(id);
       }
+      _showLocal();
+      unawaited(refresh());
       rethrow;
     }
   }
