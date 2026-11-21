@@ -26,6 +26,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   /// The one automatic retry below is still available.
   bool _canRetryOnResume = true;
 
+  /// The app came back while a scan was running: retry if it fails.
+  bool _retryIfScanFails = false;
+
   /// A manual connect is in flight (it can take up to 10 s to fail).
   bool _connecting = false;
   late final AppLifecycleListener _lifecycle;
@@ -40,11 +43,15 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
       onResume: () {
         if (!mounted || defaultTargetPlatform != TargetPlatform.iOS) return;
         if (!_canRetryOnResume || !_lastWasScan) return;
-        if (ref.read(sp.serviceProvider).status != sp.ConnectionState.error) {
-          return;
+        final status = ref.read(sp.serviceProvider).status;
+        if (status == sp.ConnectionState.scanning) {
+          // Answered while the scan still runs: it may still time out (the
+          // browse only became possible now), so retry if it does.
+          _retryIfScanFails = true;
+        } else if (status == sp.ConnectionState.error) {
+          _canRetryOnResume = false;
+          _scan();
         }
-        _canRetryOnResume = false;
-        _scan();
       },
     );
     if (widget.autoScan) {
@@ -109,6 +116,18 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     // Navigate to home once connected — once, even if two attempts succeed
     // close together (the route is still listening while it animates out).
     ref.listen<sp.ServiceState>(sp.serviceProvider, (previous, next) {
+      if (_retryIfScanFails &&
+          previous?.status == sp.ConnectionState.scanning &&
+          next.status != sp.ConnectionState.scanning) {
+        _retryIfScanFails = false;
+        if (next.status == sp.ConnectionState.error && _lastWasScan && _canRetryOnResume) {
+          _canRetryOnResume = false;
+          // Not from inside the notifier's own state change.
+          Future.microtask(() {
+            if (mounted) _scan();
+          });
+        }
+      }
       if (next.isConnected &&
           !(previous?.isConnected ?? false) &&
           !_navigated) {

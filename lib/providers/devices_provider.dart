@@ -123,11 +123,13 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// unreachable backend (requests time out after 10 s) can't stack requests
   /// that each invalidate the previous one's result.
   void _poll() {
-    if (_inFlight == null) refresh();
+    if (_inFlight == null) refresh(background: true);
   }
 
-  Future<void> refresh() {
-    final future = _refresh();
+  /// Reload the list. A [background] refresh (poll) doesn't mark the state
+  /// as loading: that would rebuild the whole list twice per poll.
+  Future<void> refresh({bool background = false}) {
+    final future = _refresh(background: background);
     _inFlight = future;
     future.whenComplete(() {
       if (identical(_inFlight, future)) _inFlight = null;
@@ -135,11 +137,13 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
     return future;
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({required bool background}) async {
     if (!mounted) return; // e.g. an action finishing after Disconnect
     final seq = ++_requestSeq;
     // Keep showing the current list while reloading (no spinner flash).
-    state = const AsyncValue<DevicesSnapshot>.loading().copyWithPrevious(state);
+    if (!background) {
+      state = const AsyncValue<DevicesSnapshot>.loading().copyWithPrevious(state);
+    }
     try {
       final snapshot = await _client.getDevices();
       if (!mounted || seq != _requestSeq) return;

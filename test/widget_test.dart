@@ -434,6 +434,37 @@ void main() {
     expect(scans, 2);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
+  testWidgets('answering the prompt while the scan runs still retries if that scan fails',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final firstScan = Completer<String?>();
+    var scans = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() {
+            scans++;
+            return scans == 1 ? firstScan.future : Future.value('http://192.168.1.20:8888');
+          }),
+          apiClientFactoryProvider.overrideWithValue((url) => _FakeApi(url, reachable: true)),
+          devicesPollIntervalProvider.overrideWithValue(null),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    // The user taps Allow while the first scan is still running...
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(scans, 1);
+    firstScan.complete(null); // ...and it times out anyway
+    await tester.pumpAndSettle();
+    expect(scans, 2);
+    expect(find.text('No Roomcast FM service found on this network.'), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('returning to the app does not scan over a failed manual connect',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
