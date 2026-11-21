@@ -16,6 +16,17 @@ import 'service_provider.dart';
 final devicesPollIntervalProvider =
     Provider<Duration?>((ref) => const Duration(seconds: 5));
 
+/// A volume change the server may not report yet.
+class _PendingVolume {
+  _PendingVolume(this.level);
+
+  final int level;
+
+  /// Request sequence at the moment the change succeeded. Snapshots from
+  /// refreshes started after that include the new level; earlier ones don't.
+  int? confirmedAtSeq;
+}
+
 class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   DevicesNotifier(this._client, {Duration? pollInterval})
       : super(const AsyncValue.loading()) {
@@ -28,12 +39,18 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   final RoomcastApiClient _client;
   Timer? _timer;
 
-  /// Incremented by every refresh and every local change; a response is only
-  /// applied if no newer refresh or change happened while it was in flight.
+  /// Incremented by every refresh; a response is only applied if no newer
+  /// refresh started while it was in flight.
   int _requestSeq = 0;
 
   /// The refresh currently in flight, if any.
   Future<void>? _inFlight;
+
+  /// Latest device list as reported by the server (without local changes).
+  DevicesSnapshot? _server;
+
+  /// Volume changes shown on top of [_server] until the server reports them.
+  final _pendingVolumes = <String, _PendingVolume>{};
 
   /// Background poll: skipped while a refresh is still running, so a slow or
   /// unreachable backend (requests time out after 10 s) can't stack requests
@@ -52,12 +69,17 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   }
 
   Future<void> _refresh() async {
+    if (!mounted) return; // e.g. an action finishing after Disconnect
     final seq = ++_requestSeq;
     // Keep showing the current list while reloading (no spinner flash).
     state = const AsyncValue<DevicesSnapshot>.loading().copyWithPrevious(state);
     try {
       final snapshot = await _client.getDevices();
-      if (mounted && seq == _requestSeq) state = AsyncValue.data(snapshot);
+      if (!mounted || seq != _requestSeq) return;
+      _server = snapshot;
+      _pendingVolumes.removeWhere(
+          (_, p) => p.confirmedAtSeq != null && seq > p.confirmedAtSeq!);
+      state = AsyncValue.data(_withPending(snapshot));
     } catch (e, st) {
       if (mounted && seq == _requestSeq) {
         state = AsyncValue<DevicesSnapshot>.error(e, st).copyWithPrevious(state);
@@ -71,45 +93,63 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
     await refresh();
   }
 
-  /// Optimistic: the slider shows the new level at once and is rolled back if
-  /// the request fails. Throws [ApiException] on failure.
+  /// Optimistic: the slider shows the new level at once. It stays shown,
+  /// even over refreshes that started before the server applied it, until
+  /// the server reports it. On failure the server's level is shown again
+  /// (unless a newer change was made) and the list re-synced.
+  /// Throws [ApiException] on failure.
   Future<void> setVolume(String id, int level) async {
-    final oldVolume = state.valueOrNull?.devices
-        .where((d) => d.id == id)
-        .map((d) => d.volume)
-        .firstOrNull;
-    // A refresh already in flight carries the old level: drop its result.
-    _requestSeq++;
-    _updateDevice(id, (d) => d.copyWith(volume: level));
+    final pending = _PendingVolume(level);
+    _pendingVolumes[id] = pending;
+    _showLocal();
     try {
       await _client.setVolume(id, level);
+      if (identical(_pendingVolumes[id], pending)) {
+        pending.confirmedAtSeq = _requestSeq;
+      }
     } catch (_) {
-      // Roll back only this device's volume, keeping any newer updates.
-      if (mounted && oldVolume != null) {
-        _updateDevice(id, (d) => d.copyWith(volume: oldVolume));
+      if (identical(_pendingVolumes[id], pending)) {
+        _pendingVolumes.remove(id);
+        _showLocal();
+        unawaited(refresh());
       }
       rethrow;
     }
   }
 
-  /// Throws [ApiException] on failure.
+  /// Throws [ApiException] on failure; re-syncs with the server either way.
   Future<void> setEnabled(String id, bool enabled) async {
-    _requestSeq++; // an in-flight refresh predates this change
-    if (enabled) {
-      await _client.enableDevice(id);
-    } else {
-      await _client.disableDevice(id);
+    try {
+      if (enabled) {
+        await _client.enableDevice(id);
+      } else {
+        await _client.disableDevice(id);
+      }
+    } finally {
+      await refresh();
     }
-    await refresh();
   }
 
-  void _updateDevice(String id, PairedDevice Function(PairedDevice) update) {
-    final current = state.valueOrNull;
-    if (current == null) return;
-    state = AsyncValue.data(current.copyWith(devices: [
-      for (final d in current.devices)
-        if (d.id == id) update(d) else d,
-    ]));
+  DevicesSnapshot _withPending(DevicesSnapshot snapshot) {
+    if (_pendingVolumes.isEmpty) return snapshot;
+    return snapshot.copyWith(devices: [
+      for (final d in snapshot.devices)
+        _pendingVolumes.containsKey(d.id)
+            ? d.copyWith(volume: _pendingVolumes[d.id]!.level)
+            : d,
+    ]);
+  }
+
+  /// Re-render the server list with local changes, keeping any error (the
+  /// offline banner) in place.
+  void _showLocal() {
+    final server = _server;
+    if (server == null || !mounted) return;
+    final data = AsyncValue<DevicesSnapshot>.data(_withPending(server));
+    state = state.hasError
+        ? AsyncValue<DevicesSnapshot>.error(state.error!, state.stackTrace ?? StackTrace.current)
+            .copyWithPrevious(data)
+        : data;
   }
 
   @override

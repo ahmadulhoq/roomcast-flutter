@@ -81,13 +81,15 @@ class PairedDevice {
   });
 
   factory PairedDevice.fromJson(Map<String, dynamic> json) {
+    final state = _parseState(json['state'] as String?);
     return PairedDevice(
       id: json['id'] as String,
       name: json['name'] as String? ?? json['id'] as String,
-      // type/enabled were added to /api/devices later; older backends omit them.
+      // type/enabled were added to /api/devices later; older backends omit
+      // them (a DISABLED state then still means disabled).
       type: parseDeviceType(json['type'] as String?),
-      enabled: json['enabled'] as bool? ?? true,
-      state: _parseState(json['state'] as String?),
+      enabled: json['enabled'] as bool? ?? state != DeviceState.disabled,
+      state: state,
       volume: (json['volume'] as num?)?.toInt() ?? 0,
       error: json['error'] as String?,
     );

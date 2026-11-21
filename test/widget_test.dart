@@ -30,4 +30,20 @@ void main() {
     expect(find.text('Find Service Automatically'), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
   });
+
+  testWidgets('an unreachable saved address stays visible after a failed auto-scan',
+      (WidgetTester tester) async {
+    // flutter_test answers every real HTTP request with 400, so the saved URL fails.
+    SharedPreferences.setMockInitialValues({'service_base_url': 'http://192.0.2.10:8888'});
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [serviceFinderProvider.overrideWithValue(() async => null)],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No Roomcast FM service found on this network.'), findsOneWidget);
+    expect(find.textContaining('Could not reach service at http://192.0.2.10:8888'), findsOneWidget);
+  });
 }
+

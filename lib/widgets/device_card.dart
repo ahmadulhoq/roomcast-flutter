@@ -27,13 +27,16 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
   DevicesNotifier get _notifier => ref.read(devicesProvider.notifier);
 
   /// Run an API action; show [failure] + the server's message on error.
-  Future<void> _run(Future<void> Function() action, String failure) async {
+  /// Pass [messenger] when the card may be gone by the time it fails.
+  Future<void> _run(Future<void> Function() action, String failure,
+      {ScaffoldMessengerState? messenger}) async {
     try {
       await action();
     } catch (e) {
-      if (!mounted) return;
+      final target = messenger ?? (mounted ? ScaffoldMessenger.of(context) : null);
+      if (target == null) return;
       final message = e is ApiException ? e.message : e.toString();
-      ScaffoldMessenger.of(context).showSnackBar(
+      target.showSnackBar(
         SnackBar(content: Text('$failure: $message'), backgroundColor: Colors.red),
       );
     }
@@ -43,6 +46,7 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
     // Read the notifier before awaiting the dialog: the card may be disposed
     // while it is open (list refresh), and `ref` can't be used after that.
     final notifier = _notifier;
+    final messenger = ScaffoldMessenger.of(context);
     final name = device.name;
     final id = device.id;
     final confirmed = await showDialog<bool>(
@@ -64,7 +68,7 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
       ),
     );
     if (confirmed == true) {
-      await _run(() => notifier.remove(id), 'Could not remove $name');
+      await _run(() => notifier.remove(id), 'Could not remove $name', messenger: messenger);
     }
   }
 

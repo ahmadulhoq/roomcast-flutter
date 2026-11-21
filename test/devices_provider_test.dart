@@ -14,6 +14,12 @@ class SlowClient extends RoomcastApiClient {
 
   final pending = <Completer<DevicesSnapshot>>[];
   final volumeCalls = <Completer<void>>[];
+  bool failEnable = false;
+
+  @override
+  Future<void> enableDevice(String id) async {
+    if (failEnable) throw ApiException('speaker offline');
+  }
 
   @override
   Future<DevicesSnapshot> getDevices() {
@@ -80,13 +86,91 @@ void main() {
 
     final change = notifier.setVolume('a', 80);
     unawaited(notifier.refresh()); // newer data arrives while the request is pending
-    client.pending[1].complete(snap({'a': 80, 'b': 35}));
+    client.pending[1].complete(snap({'a': 50, 'b': 35})); // server hasn't applied 80
     await tester.pump();
+    expect(volumeOf(notifier, 'a'), 80, reason: 'pending change stays shown');
     client.volumeCalls.single.completeError(ApiException('speaker offline'));
     await expectLater(change, throwsA(isA<ApiException>()));
-    expect(volumeOf(notifier, 'a'), 50);
+    expect(volumeOf(notifier, 'a'), 50, reason: "back to the server's level");
     expect(volumeOf(notifier, 'b'), 35, reason: "the other device's update is kept");
+    expect(client.pending.length, 3, reason: 're-syncs after a failure');
     notifier.dispose();
+  });
+
+  testWidgets('a refresh that started before the server applied a change keeps it shown', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final change = notifier.setVolume('cast', 80);  // POST in flight
+    unawaited(notifier.refresh());                    // poll starts during the POST
+    client.volumeCalls.single.complete();             // POST succeeds…
+    await change;
+    client.pending[1].complete(snap({'cast': 50}));   // …then the earlier poll lands
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80, reason: 'the poll predates the change');
+
+    unawaited(notifier.refresh());                    // a later refresh confirms it
+    client.pending[2].complete(snap({'cast': 80}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
+  testWidgets('an earlier failed change does not undo a later one', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 80);
+    final second = notifier.setVolume('cast', 30);
+    client.volumeCalls[1].complete();
+    await second;
+    client.volumeCalls[0].completeError(ApiException('timeout'));
+    await expectLater(first, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 30);
+    notifier.dispose();
+  });
+
+  testWidgets('a failed enable still re-syncs with the server', (tester) async {
+    final client = SlowClient()..failEnable = true;
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final toggle = notifier.setEnabled('cast', true);
+    await tester.pump();
+    expect(client.pending.length, 2, reason: 'refresh runs even though the request failed');
+    client.pending[1].complete(snap({'cast': 50}));
+    await expectLater(toggle, throwsA(isA<ApiException>()));
+    notifier.dispose();
+  });
+
+  testWidgets('a local volume change while offline keeps the offline error', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+    unawaited(notifier.refresh());
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pump();
+    expect(notifier.state.hasError, isTrue);
+
+    unawaited(notifier.setVolume('cast', 70).catchError((Object _) {}));
+    await tester.pump();
+    expect(notifier.state.hasError, isTrue, reason: 'banner must stay');
+    expect(volumeOf(notifier, 'cast'), 70);
+    notifier.dispose();
+  });
+
+  testWidgets('refresh after dispose is a no-op', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    notifier.dispose();
+    await notifier.refresh(); // must not throw "used after dispose"
+    expect(client.pending.length, 1);
   });
 
   testWidgets('a failed refresh keeps the list and shows a banner', (tester) async {

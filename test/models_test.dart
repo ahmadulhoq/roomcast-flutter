@@ -32,6 +32,11 @@ void main() {
       expect(snapshot.devices.single.type, DeviceType.unknown);
       expect(snapshot.devices.single.enabled, isTrue);
     });
+
+    test('without an enabled field, a DISABLED state means disabled', () {
+      final d = PairedDevice.fromJson({'id': 'x', 'state': 'DISABLED', 'volume': 10});
+      expect(d.enabled, isFalse);
+    });
   });
 
   group('DiscoveredDevice.toDeviceConfig', () {

@@ -13,6 +13,7 @@ class FakeClient extends RoomcastApiClient {
   DevicesSnapshot snapshot;
   final calls = <String>[];
   bool failVolume = false;
+  bool failRemove = false;
 
   @override
   Future<DevicesSnapshot> getDevices() async => snapshot;
@@ -35,7 +36,10 @@ class FakeClient extends RoomcastApiClient {
   }
 
   @override
-  Future<void> removeDevice(String id) async => calls.add('remove $id');
+  Future<void> removeDevice(String id) async {
+    calls.add('remove $id');
+    if (failRemove) throw ApiException('backend busy', statusCode: 500);
+  }
 }
 
 const _cast = PairedDevice(
@@ -144,6 +148,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(client.calls, ['remove cast']);
+  });
+
+  testWidgets('a failed remove is reported even if the card is gone', (tester) async {
+    final client = await pumpCard(tester);
+    client.failRemove = true;
+    await tester.drag(find.byType(Slidable), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove'));
+    await tester.pumpAndSettle();
+    client.snapshot = const DevicesSnapshot(streaming: true, devices: []);
+    final container = ProviderScope.containerOf(tester.element(find.byType(ListView)));
+    await container.read(devicesProvider.notifier).refresh();
+    await tester.pump();
+    expect(find.byType(DeviceCard), findsNothing);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Could not remove Dining Room: backend busy'), findsOneWidget);
   });
 
   testWidgets('DLNA device shows the speaker icon', (tester) async {
