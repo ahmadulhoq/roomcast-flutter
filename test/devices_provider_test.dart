@@ -53,6 +53,18 @@ class SlowClient extends RoomcastApiClient {
   }
 }
 
+DiscoveredDevice _found(String name) =>
+    DiscoveredDevice(name: name, type: DeviceType.dlna, idSuggestion: name);
+
+class TwoScansClient extends RoomcastApiClient {
+  TwoScansClient() : super('http://test');
+  final results = [Completer<List<DiscoveredDevice>>(), Completer<List<DiscoveredDevice>>()];
+  int _calls = 0;
+
+  @override
+  Future<List<DiscoveredDevice>> scan() => results[_calls++].future;
+}
+
 class SlowScanClient extends RoomcastApiClient {
   SlowScanClient() : super('http://test');
   final result = Completer<List<DiscoveredDevice>>();
@@ -254,6 +266,19 @@ void main() {
     await tester.pump();
     expect(notifier.state.hasError, isTrue);
     expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
+  test('an older speaker scan finishing last does not overwrite a newer one', () async {
+    final client = TwoScansClient();
+    final notifier = ScanNotifier(client);
+    final first = notifier.scan();
+    final second = notifier.scan(); // "Scan again" while the first runs
+    client.results[1].complete([_found('new')]);
+    await second;
+    client.results[0].complete([_found('stale')]);
+    await first;
+    expect(notifier.state.value!.map((d) => d.name), ['new']);
     notifier.dispose();
   });
 

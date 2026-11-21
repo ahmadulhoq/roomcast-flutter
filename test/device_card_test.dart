@@ -273,6 +273,13 @@ void main() {
     expect(find.textContaining('Could not set volume'), findsNothing);
   });
 
+  testWidgets('the enable switch is named for screen readers', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await pumpCard(tester);
+    expect(find.bySemanticsLabel(RegExp('Enable Dining Room')), findsOneWidget);
+    semantics.dispose();
+  });
+
   testWidgets('DLNA device shows the speaker icon', (tester) async {
     await pumpCard(tester, device: const PairedDevice(
       id: 'kef', name: 'KEF', type: DeviceType.dlna, enabled: false,

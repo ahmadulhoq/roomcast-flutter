@@ -89,13 +89,24 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
   }
 }
 
-class _DiscoveredDeviceTile extends ConsumerWidget {
+class _DiscoveredDeviceTile extends ConsumerStatefulWidget {
   final DiscoveredDevice device;
 
   const _DiscoveredDeviceTile({required this.device});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_DiscoveredDeviceTile> createState() => _DiscoveredDeviceTileState();
+}
+
+class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
+  /// An add request is in flight: a second tap would pair it again (and
+  /// the backend would replace the output it just created).
+  bool _adding = false;
+
+  DiscoveredDevice get device => widget.device;
+
+  @override
+  Widget build(BuildContext context) {
     return ListTile(
       leading: Icon(
         device.type == DeviceType.chromecast
@@ -108,19 +119,21 @@ class _DiscoveredDeviceTile extends ConsumerWidget {
         device.type == DeviceType.chromecast ? 'Google Cast' : 'DLNA / UPnP',
       ),
       trailing: FilledButton(
-        onPressed: () => _addDevice(context, ref),
+        onPressed: _adding ? null : _addDevice,
         child: const Text('Add'),
       ),
     );
   }
 
-  Future<void> _addDevice(BuildContext context, WidgetRef ref) async {
+  Future<void> _addDevice() async {
+    setState(() => _adding = true);
     // Use id_suggestion as the device id, deduplicated at API level
     final error = await ref
         .read(scanProvider.notifier)
         .addDevice(device, device.idSuggestion);
 
-    if (!context.mounted) return;
+    if (!mounted) return;
+    setState(() => _adding = false);
 
     if (error == null) {
       // Refresh paired list

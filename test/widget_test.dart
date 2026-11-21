@@ -466,6 +466,28 @@ void main() {
     notifier.dispose();
   });
 
+  testWidgets('an address without a port uses the backend port; Go connects', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'user_disconnected': true}); // no auto-scan
+    final urls = <String>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() async => null),
+          apiClientFactoryProvider.overrideWithValue((url) {
+            urls.add(url);
+            return _FakeApi(url, reachable: false);
+          }),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '192.168.1.5');
+    await tester.testTextInput.receiveAction(TextInputAction.go); // the keyboard's Go key
+    await tester.pumpAndSettle();
+    expect(urls, ['http://192.168.1.5:8888'], reason: 'not port 80');
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

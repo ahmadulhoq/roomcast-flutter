@@ -142,9 +142,16 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
                         ),
                   ),
                   const SizedBox(width: 4),
-                  Switch(
-                    value: device.enabled,
-                    onChanged: _togglingEnabled ? null : _setEnabled,
+                  // Named for screen readers ("Switch, on" alone doesn't say
+                  // which speaker it turns off).
+                  MergeSemantics(
+                    child: Semantics(
+                      label: 'Enable ${device.name}',
+                      child: Switch(
+                        value: device.enabled,
+                        onChanged: _togglingEnabled ? null : _setEnabled,
+                      ),
+                    ),
                   ),
                 ],
               ),

@@ -204,6 +204,14 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                         prefixIcon: Icon(Icons.lan),
                       ),
                       keyboardType: TextInputType.url,
+                      // An address, not prose: no autocorrect/capitals; the
+                      // keyboard's Go key connects.
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      textInputAction: TextInputAction.go,
+                      onSubmitted: (_) {
+                        if (!_connecting) _connectManually();
+                      },
                     ),
                     const SizedBox(height: 12),
                     OutlinedButton(

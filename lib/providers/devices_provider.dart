@@ -270,13 +270,18 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
 
   final RoomcastApiClient _client;
 
+  /// Incremented by every scan: only the newest one's result is shown.
+  int _scanSeq = 0;
+
   Future<void> scan() async {
+    final seq = ++_scanSeq;
     state = const AsyncValue.loading();
     try {
       final devices = await _client.scan();
-      if (mounted) state = AsyncValue.data(devices); // not if the connection changed meanwhile
+      // Not if the connection changed meanwhile, or a newer scan started.
+      if (mounted && seq == _scanSeq) state = AsyncValue.data(devices);
     } catch (e, st) {
-      if (mounted) state = AsyncValue.error(e, st);
+      if (mounted && seq == _scanSeq) state = AsyncValue.error(e, st);
     }
   }
 
