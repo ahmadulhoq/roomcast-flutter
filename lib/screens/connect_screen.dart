@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/service_provider.dart' as sp;
@@ -18,8 +19,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _ipController = TextEditingController();
   bool _navigated = false;
 
-  /// True once this screen started a scan (on open or with the button).
-  bool _scanned = false;
+  /// True while the last attempt from this screen was a scan (not a
+  /// manual connect), so an error on screen is that scan's.
+  bool _lastWasScan = false;
+
+  /// The one automatic retry below is still available.
+  bool _canRetryOnResume = true;
   late final AppLifecycleListener _lifecycle;
 
   @override
@@ -27,10 +32,13 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     super.initState();
     // iOS asks for Local Network access on the first scan; the app is
     // inactive while the prompt shows, and the scan can fail or time out
-    // before the user answers. Scan again when the app is back.
+    // before the user answers. Scan once more when the app is back.
     _lifecycle = AppLifecycleListener(onResume: () {
-      if (!mounted || !_scanned) return;
-      if (ref.read(sp.serviceProvider).status == sp.ConnectionState.error) _scan();
+      if (!mounted || defaultTargetPlatform != TargetPlatform.iOS) return;
+      if (!_canRetryOnResume || !_lastWasScan) return;
+      if (ref.read(sp.serviceProvider).status != sp.ConnectionState.error) return;
+      _canRetryOnResume = false;
+      _scan();
     });
     if (widget.autoScan) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -42,7 +50,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   }
 
   void _scan() {
-    _scanned = true;
+    _lastWasScan = true;
     ref.read(sp.serviceProvider.notifier).scanAndConnect();
   }
 
@@ -137,6 +145,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                     final raw = _ipController.text.trim();
                     if (raw.isEmpty) return;
                     final url = raw.startsWith('http') ? raw : 'http://$raw';
+                    _lastWasScan = false;
                     ref.read(sp.serviceProvider.notifier).connectTo(url);
                   },
                   child: const Text('Connect'),

@@ -19,13 +19,30 @@ final devicesPollIntervalProvider =
 
 /// A volume change the server may not report yet.
 class _PendingVolume {
-  _PendingVolume(this.level);
+  _PendingVolume(this.level, this.previous);
 
   final int level;
+
+  /// The change this one replaced, shown again if this one fails (dropped
+  /// once this one is accepted: nothing before it matters then).
+  _PendingVolume? previous;
 
   /// Request sequence at the moment the change succeeded. Snapshots from
   /// refreshes started after that include the new level; earlier ones don't.
   int? confirmedAtSeq;
+
+  /// Its request failed.
+  bool failed = false;
+
+  /// The newest change in this chain that hasn't failed (still in flight, or
+  /// accepted but not reported yet); null if all failed.
+  _PendingVolume? get fallback {
+    var p = previous;
+    while (p != null && p.failed) {
+      p = p.previous;
+    }
+    return p;
+  }
 }
 
 class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
@@ -135,8 +152,7 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// reported yet — else the server's own level, and the list is re-synced.
   /// Throws [ApiException] on failure.
   Future<void> setVolume(String id, int level) async {
-    final previous = _pendingVolumes[id];
-    final pending = _PendingVolume(level);
+    final pending = _PendingVolume(level, _pendingVolumes[id]);
     _pendingVolumes[id] = pending;
     _showLocal();
     try {
@@ -144,10 +160,13 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
       // Recorded even if a newer change replaced this one: should that one
       // fail, this level is what the server has.
       pending.confirmedAtSeq = _requestSeq;
+      pending.previous = null;
     } catch (_) {
+      pending.failed = true; // never shown again, even as a fallback
       if (identical(_pendingVolumes[id], pending)) {
-        if (previous != null) {
-          _pendingVolumes[id] = previous; // its own outcome then decides
+        final fallback = pending.fallback;
+        if (fallback != null) {
+          _pendingVolumes[id] = fallback; // its own outcome then decides
         } else {
           _pendingVolumes.remove(id);
         }

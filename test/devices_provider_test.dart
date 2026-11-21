@@ -189,6 +189,25 @@ void main() {
     notifier.dispose();
   });
 
+  testWidgets('when every change in a row fails, the server level is shown', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 30);
+    final second = notifier.setVolume('cast', 60);
+    client.volumeCalls[0].completeError(ApiException('speaker offline'));
+    await expectLater(first, throwsA(isA<ApiException>()));
+    client.volumeCalls[1].completeError(ApiException('speaker offline'));
+    await expectLater(second, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 50, reason: 'not the failed 30');
+    client.pending.last.complete(snap({'cast': 50}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 50);
+    notifier.dispose();
+  });
+
   testWidgets('a failed enable still re-syncs with the server', (tester) async {
     final client = SlowClient()..failEnable = true;
     final notifier = DevicesNotifier(client);

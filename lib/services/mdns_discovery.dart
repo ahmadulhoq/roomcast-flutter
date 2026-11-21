@@ -98,6 +98,13 @@ class ServiceDiscovery {
         },
       );
       await discovery.start();
+      if (done) {
+        // Timed out while starting: the stop in `finally` came too early.
+        try {
+          await discovery.stop().timeout(_stopTimeout);
+        } catch (_) {}
+        return null;
+      }
       return found.future;
     }
 

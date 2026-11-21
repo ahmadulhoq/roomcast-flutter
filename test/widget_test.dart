@@ -8,7 +8,6 @@ import 'package:roomcast_fm/main.dart';
 import 'package:roomcast_fm/providers/devices_provider.dart';
 import 'package:roomcast_fm/providers/service_provider.dart';
 import 'package:roomcast_fm/screens/connect_screen.dart';
-import 'package:roomcast_fm/screens/home_screen.dart';
 import 'package:roomcast_fm/services/api_client.dart';
 
 class _ReplaceCounter extends NavigatorObserver {
@@ -281,7 +280,7 @@ void main() {
     expect(find.text('Find Service Automatically'), findsOneWidget);
   });
 
-  testWidgets('a failed scan is retried when the app returns (iOS permission prompt)',
+  testWidgets('a failed scan is retried once when the app returns (iOS permission prompt)',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
     var scans = 0;
@@ -289,7 +288,7 @@ void main() {
       ProviderScope(
         overrides: [
           // The first scan fails while the Local Network prompt is up.
-          serviceFinderProvider.overrideWithValue(() async => ++scans == 1 ? null : 'http://192.168.1.20:8888'),
+          serviceFinderProvider.overrideWithValue(() async => ++scans == 3 ? 'http://192.168.1.20:8888' : null),
           apiClientFactoryProvider.overrideWithValue((url) => _FakeApi(url, reachable: true)),
           devicesPollIntervalProvider.overrideWithValue(null),
         ],
@@ -298,12 +297,54 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('No Roomcast FM service found on this network.'), findsOneWidget);
-    // The prompt made the app inactive; the user taps Allow.
+    void appSwitch() {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    }
+    appSwitch(); // the user taps Allow
+    await tester.pumpAndSettle();
+    expect(scans, 2);
+    appSwitch(); // e.g. to look up the IP: no more scans of its own
+    await tester.pumpAndSettle();
+    expect(scans, 2);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('returning to the app does not scan over a failed manual connect',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    var scans = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() async {
+            scans++;
+            return null;
+          }),
+          apiClientFactoryProvider.overrideWithValue(
+              (url) => _FakeApi(url, reachable: !url.contains('typo'))),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'typo:8888');
+    await tester.tap(find.text('Connect'));
+    await tester.pumpAndSettle();
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
-    expect(scans, 2);
-    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(scans, 1);
+    expect(find.textContaining('Could not reach service at http://typo:8888'), findsOneWidget);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  test('a finder that throws ends the scan like finding nothing', () async {
+    SharedPreferences.setMockInitialValues({});
+    final notifier = ServiceNotifier(() async => throw StateError('plugin missing'),
+        clientFactory: (url) => _FakeApi(url, reachable: true));
+    await notifier.scanAndConnect();
+    expect(notifier.state.status.name, 'error');
+    expect(notifier.state.errorMessage, contains('No Roomcast FM service found'));
+    notifier.dispose();
   });
 
   testWidgets('an unreachable saved address stays visible after a failed auto-scan',

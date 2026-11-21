@@ -111,6 +111,8 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     String? url;
     try {
       url = await _findService();
+    } catch (_) {
+      url = null; // discovery itself broke: same as finding nothing
     } finally {
       _scans.remove(attempt);
     }
@@ -154,10 +156,9 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     // Close the replaced connection's HTTP client.
     if (previous != null && !identical(previous, client)) previous.dispose();
     final prefs = await SharedPreferences.getInstance();
-    if (identical(_connected, client)) {
-      await prefs.setString(_prefKey, baseUrl);
-      await prefs.remove(_disconnectedKey);
-    }
+    // Checked before each write: a Disconnect in between must win.
+    if (identical(_connected, client)) await prefs.setString(_prefKey, baseUrl);
+    if (identical(_connected, client)) await prefs.remove(_disconnectedKey);
   }
 
   /// Show a failure. With a working connection nothing changes (the state

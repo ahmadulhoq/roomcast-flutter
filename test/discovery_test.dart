@@ -24,7 +24,12 @@ class FakeDiscoveryAction extends BonsoirAction<BonsoirDiscoveryEvent> with Serv
   Future<void> start() async {
     onStart?.call();
     if (hangStart) await Completer<void>().future; // the platform never answers
+    if (startDelay != null) await Future<void>.delayed(startDelay!);
+    if (_stopped) running = true; // started after stop(): browsing with no one listening
   }
+
+  Duration? startDelay;
+  bool running = false;
 
   void Function()? onStart;
   bool hangStart = false;
@@ -33,6 +38,7 @@ class FakeDiscoveryAction extends BonsoirAction<BonsoirDiscoveryEvent> with Serv
   @override
   Future<void> stop() async {
     _stopped = true;
+    running = false;
     if (hangStop) await Completer<void>().future;
   }
 
@@ -138,6 +144,13 @@ void main() {
         .timeout(const Duration(seconds: 6), onTimeout: () => 'hung');
     expect(result, isNull);
     expect(DateTime.now().difference(started), lessThan(const Duration(seconds: 4)));
+  });
+
+  test('discovery that finishes starting after the timeout is stopped', () async {
+    action.startDelay = const Duration(milliseconds: 800);
+    expect(await ServiceDiscovery.findService(timeout: const Duration(milliseconds: 300)), isNull);
+    await Future<void>.delayed(const Duration(seconds: 1));
+    expect(action.running, isFalse, reason: 'no browse left running in the background');
   });
 
   test('an error before anything is found ends the scan at once', () async {
