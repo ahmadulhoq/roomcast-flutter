@@ -4,6 +4,17 @@ enum DeviceType { chromecast, dlna, unknown }
 
 enum DeviceState { idle, connecting, playing, error, disabled, unknown }
 
+DeviceType parseDeviceType(String? t) {
+  switch (t) {
+    case 'chromecast':
+      return DeviceType.chromecast;
+    case 'dlna':
+      return DeviceType.dlna;
+    default:
+      return DeviceType.unknown;
+  }
+}
+
 /// A discovered (unpaired) device returned by the backend scan.
 class DiscoveredDevice {
   final String name;
@@ -23,22 +34,11 @@ class DiscoveredDevice {
   factory DiscoveredDevice.fromJson(Map<String, dynamic> json) {
     return DiscoveredDevice(
       name: json['name'] as String? ?? 'Unknown',
-      type: _parseType(json['type'] as String?),
+      type: parseDeviceType(json['type'] as String?),
       ip: json['ip'] as String?,
       locationUrl: json['location_url'] as String?,
       idSuggestion: json['id_suggestion'] as String? ?? 'device',
     );
-  }
-
-  static DeviceType _parseType(String? t) {
-    switch (t) {
-      case 'chromecast':
-        return DeviceType.chromecast;
-      case 'dlna':
-        return DeviceType.dlna;
-      default:
-        return DeviceType.unknown;
-    }
   }
 
   /// Build a device config dict for POST /api/devices.
@@ -53,9 +53,8 @@ class DiscoveredDevice {
     if (type == DeviceType.chromecast) {
       config['device_name'] = name;
     } else {
-      config['device_ip'] = ip;
+      if (ip != null) config['device_ip'] = ip;
       if (locationUrl != null) config['location_url'] = locationUrl;
-      config['dlna_stream_mode'] = 'chunked';
     }
     return config;
   }
@@ -65,6 +64,8 @@ class DiscoveredDevice {
 class PairedDevice {
   final String id;
   final String name;
+  final DeviceType type;
+  final bool enabled;
   final DeviceState state;
   final int volume;
   final String? error;
@@ -72,16 +73,23 @@ class PairedDevice {
   const PairedDevice({
     required this.id,
     required this.name,
+    this.type = DeviceType.unknown,
+    this.enabled = true,
     required this.state,
     required this.volume,
     this.error,
   });
 
   factory PairedDevice.fromJson(Map<String, dynamic> json) {
+    final state = _parseState(json['state'] as String?);
     return PairedDevice(
       id: json['id'] as String,
       name: json['name'] as String? ?? json['id'] as String,
-      state: _parseState(json['state'] as String?),
+      // type/enabled were added to /api/devices later; older backends omit
+      // them (a DISABLED state then still means disabled).
+      type: parseDeviceType(json['type'] as String?),
+      enabled: json['enabled'] as bool? ?? state != DeviceState.disabled,
+      state: state,
       volume: (json['volume'] as num?)?.toInt() ?? 0,
       error: json['error'] as String?,
     );
@@ -104,13 +112,37 @@ class PairedDevice {
     }
   }
 
-  PairedDevice copyWith({int? volume, DeviceState? state}) {
+  PairedDevice copyWith({int? volume, DeviceState? state, bool? enabled}) {
     return PairedDevice(
       id: id,
       name: name,
+      type: type,
+      enabled: enabled ?? this.enabled,
       state: state ?? this.state,
       volume: volume ?? this.volume,
       error: error,
     );
   }
+}
+
+/// Paired devices plus whether the backend is streaming audio right now.
+class DevicesSnapshot {
+  final bool streaming;
+  final List<PairedDevice> devices;
+
+  const DevicesSnapshot({required this.streaming, required this.devices});
+
+  static const empty = DevicesSnapshot(streaming: false, devices: []);
+
+  factory DevicesSnapshot.fromJson(Map<String, dynamic> json) {
+    final encoder = json['encoder'] as Map<String, dynamic>? ?? const {};
+    final outputs = json['outputs'] as List<dynamic>? ?? const [];
+    return DevicesSnapshot(
+      streaming: encoder['streaming'] as bool? ?? false,
+      devices: outputs.cast<Map<String, dynamic>>().map(PairedDevice.fromJson).toList(),
+    );
+  }
+
+  DevicesSnapshot copyWith({List<PairedDevice>? devices}) =>
+      DevicesSnapshot(streaming: streaming, devices: devices ?? this.devices);
 }

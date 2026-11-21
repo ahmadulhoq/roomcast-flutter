@@ -41,9 +41,22 @@ class ServiceState {
   bool get isConnected => status == ConnectionState.connected && client != null;
 }
 
+/// Finds the backend on the network; returns its base URL or null.
+typedef ServiceFinder = Future<String?> Function();
+
+/// Overridable in tests (the real finder needs the platform plugin).
+final serviceFinderProvider =
+    Provider<ServiceFinder>((ref) => ServiceDiscovery.findService);
+
 class ServiceNotifier extends StateNotifier<ServiceState> {
-  ServiceNotifier()
+  ServiceNotifier(this._findService)
       : super(const ServiceState(status: ConnectionState.idle));
+
+  final ServiceFinder _findService;
+
+  /// Why the last connect attempt failed (e.g. the saved address at launch),
+  /// kept so a following failed scan doesn't hide it.
+  String? _lastConnectError;
 
   /// Try to load a previously saved URL, then connect.
   Future<void> loadSaved() async {
@@ -57,11 +70,14 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   /// Scan mDNS for the backend, then connect.
   Future<void> scanAndConnect() async {
     state = const ServiceState(status: ConnectionState.scanning);
-    final url = await ServiceDiscovery.findService();
+    final url = await _findService();
     if (url == null) {
-      state = const ServiceState(
+      state = ServiceState(
         status: ConnectionState.error,
-        errorMessage: 'No Roomcast FM service found on this network.',
+        errorMessage: [
+          'No Roomcast FM service found on this network.',
+          ?_lastConnectError,
+        ].join('\n'),
       );
       return;
     }
@@ -75,15 +91,17 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
       await client.getInfo();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefKey, baseUrl);
+      _lastConnectError = null;
       state = ServiceState(
         status: ConnectionState.connected,
         baseUrl: baseUrl,
         client: client,
       );
     } catch (e) {
+      _lastConnectError = 'Could not reach service at $baseUrl: $e';
       state = ServiceState(
         status: ConnectionState.error,
-        errorMessage: 'Could not reach service at $baseUrl: $e',
+        errorMessage: _lastConnectError,
       );
     }
   }
@@ -96,5 +114,5 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
 final serviceProvider =
     StateNotifierProvider<ServiceNotifier, ServiceState>((ref) {
-  return ServiceNotifier();
+  return ServiceNotifier(ref.watch(serviceFinderProvider));
 });
