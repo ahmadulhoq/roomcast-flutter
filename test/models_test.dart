@@ -4,6 +4,27 @@ import 'package:roomcast_fm/models/device.dart';
 import 'package:roomcast_fm/services/mdns_discovery.dart';
 
 void main() {
+  group('ResolveTracker', () {
+    BonsoirService s(String name) =>
+        BonsoirService.ignoreNorms(name: name, type: serviceType, port: 8888);
+
+    test('resolves each service once, retries failures up to maxAttempts', () {
+      final tracker = ResolveTracker(maxAttempts: 3);
+      expect(tracker.found(s('Roomcast FM')), isTrue);
+      expect(tracker.found(s('Roomcast FM')), isFalse, reason: 'seen again: not re-resolved');
+      expect(tracker.retries().map((x) => x.name), ['Roomcast FM']); // attempt 2
+      expect(tracker.retries().map((x) => x.name), ['Roomcast FM']); // attempt 3
+      expect(tracker.retries(), isEmpty, reason: 'attempts exhausted');
+    });
+
+    test('resolved services are not retried', () {
+      final tracker = ResolveTracker();
+      tracker.found(s('Roomcast FM'));
+      tracker.resolved(s('Roomcast FM'));
+      expect(tracker.retries(), isEmpty);
+    });
+  });
+
   group('DevicesSnapshot / PairedDevice', () {
     test('parses type, enabled and streaming', () {
       final snapshot = DevicesSnapshot.fromJson({
@@ -73,6 +94,14 @@ void main() {
     test('ignores a TXT ip that is not an address', () {
       expect(ServiceDiscovery.baseUrlFor(svc(host: '192.168.1.21', attrs: {'ip': 'nope'})),
           'http://192.168.1.21:8888');
+    });
+
+    test('ignores a loopback/unspecified TXT ip and uses the host', () {
+      expect(ServiceDiscovery.baseUrlFor(svc(host: '192.168.1.20', attrs: {'ip': '127.0.0.1'})),
+          'http://192.168.1.20:8888');
+      expect(ServiceDiscovery.baseUrlFor(svc(host: '192.168.1.20', attrs: {'ip': '0.0.0.0'})),
+          'http://192.168.1.20:8888');
+      expect(ServiceDiscovery.baseUrlFor(svc(host: '127.0.0.1')), isNull);
     });
 
     test('brackets IPv6 and rejects unresolved services', () {

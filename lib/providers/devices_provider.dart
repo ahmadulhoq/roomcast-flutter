@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
 import '../services/api_client.dart';
@@ -29,15 +30,42 @@ class _PendingVolume {
 
 class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   DevicesNotifier(this._client, {Duration? pollInterval})
-      : super(const AsyncValue.loading()) {
+      : _pollInterval = pollInterval,
+        super(const AsyncValue.loading()) {
     refresh();
     if (pollInterval != null) {
-      _timer = Timer.periodic(pollInterval, (_) => _poll());
+      _startPolling();
+      // Don't poll while the app is in the background (battery, Wi-Fi).
+      _lifecycle = AppLifecycleListener(onStateChange: _onLifecycleChange);
     }
   }
 
   final RoomcastApiClient _client;
+  final Duration? _pollInterval;
   Timer? _timer;
+  AppLifecycleListener? _lifecycle;
+
+  void _startPolling() {
+    _timer?.cancel();
+    _timer = Timer.periodic(_pollInterval!, (_) => _poll());
+  }
+
+  void _onLifecycleChange(AppLifecycleState lifecycle) {
+    switch (lifecycle) {
+      case AppLifecycleState.resumed:
+        if (_timer == null) {
+          _startPolling();
+          refresh(); // catch up at once on return
+        }
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _timer?.cancel();
+        _timer = null;
+      case AppLifecycleState.inactive:
+        break; // still visible (e.g. a system sheet on top)
+    }
+  }
 
   /// Incremented by every refresh; a response is only applied if no newer
   /// refresh started while it was in flight.
@@ -87,10 +115,14 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
     }
   }
 
-  /// Throws [ApiException] on failure.
+  /// Throws [ApiException] on failure; re-syncs with the server either way
+  /// (a timed-out remove may still have happened).
   Future<void> remove(String id) async {
-    await _client.removeDevice(id);
-    await refresh();
+    try {
+      await _client.removeDevice(id);
+    } finally {
+      await refresh();
+    }
   }
 
   /// Optimistic: the slider shows the new level at once. It stays shown,
@@ -155,6 +187,7 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   @override
   void dispose() {
     _timer?.cancel();
+    _lifecycle?.dispose();
     super.dispose();
   }
 }

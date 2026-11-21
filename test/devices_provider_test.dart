@@ -6,7 +6,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:roomcast_fm/models/device.dart';
 import 'package:roomcast_fm/providers/devices_provider.dart';
 import 'package:roomcast_fm/screens/home_screen.dart';
+import 'package:roomcast_fm/providers/service_provider.dart' as sp;
 import 'package:roomcast_fm/services/api_client.dart';
+
+/// A service notifier that starts out connected (the status bar shows the
+/// Streaming/Idle badge only when connected).
+class _ConnectedService extends sp.ServiceNotifier {
+  _ConnectedService(RoomcastApiClient client) : super(() async => null) {
+    state = sp.ServiceState(status: sp.ConnectionState.connected, baseUrl: 'http://test', client: client);
+  }
+}
 
 /// Every getDevices()/setVolume() call waits until the test completes it.
 class SlowClient extends RoomcastApiClient {
@@ -15,6 +24,12 @@ class SlowClient extends RoomcastApiClient {
   final pending = <Completer<DevicesSnapshot>>[];
   final volumeCalls = <Completer<void>>[];
   bool failEnable = false;
+  bool failRemove = false;
+
+  @override
+  Future<void> removeDevice(String id) async {
+    if (failRemove) throw ApiException('Network error: timeout');
+  }
 
   @override
   Future<void> enableDevice(String id) async {
@@ -171,6 +186,64 @@ void main() {
     notifier.dispose();
     await notifier.refresh(); // must not throw "used after dispose"
     expect(client.pending.length, 1);
+  });
+
+  testWidgets('polling pauses in the background and catches up on return', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    // The framework moves through each state (resumed → inactive → hidden → paused).
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await tester.pump(const Duration(seconds: 16));
+    expect(client.pending.length, 1, reason: 'no polls while backgrounded');
+
+    for (final s in [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await tester.pump();
+    expect(client.pending.length, 2, reason: 'refreshes at once on return');
+    client.pending[1].complete(snap({'cast': 50}));
+    await tester.pump(const Duration(seconds: 5));
+    expect(client.pending.length, 3, reason: 'polling resumed');
+    notifier.dispose();
+  });
+
+  testWidgets('a failed remove still re-syncs with the server', (tester) async {
+    final client = SlowClient()..failRemove = true;
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+    final removal = notifier.remove('cast');
+    await tester.pump();
+    expect(client.pending.length, 2);
+    client.pending[1].complete(snap({}));
+    await expectLater(removal, throwsA(isA<ApiException>()));
+    expect(notifier.state.value!.devices, isEmpty, reason: 'it was removed after all');
+    notifier.dispose();
+  });
+
+  testWidgets('the Streaming badge is hidden while the backend is unreachable', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        sp.serviceProvider.overrideWith((ref) => _ConnectedService(client)),
+        devicesProvider.overrideWith((ref) => DevicesNotifier(client)),
+      ],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].complete(snap({'Dining Room': 50}));
+    await tester.pumpAndSettle();
+    expect(find.text('Streaming'), findsOneWidget, reason: 'shown while reachable');
+    await tester.tap(find.byIcon(Icons.refresh));
+    await tester.pump();
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    expect(find.text('Streaming'), findsNothing);
+    expect(find.text('Idle'), findsNothing);
   });
 
   testWidgets('a failed refresh keeps the list and shows a banner', (tester) async {

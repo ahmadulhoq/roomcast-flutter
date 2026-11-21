@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
@@ -14,6 +16,7 @@ class FakeClient extends RoomcastApiClient {
   final calls = <String>[];
   bool failVolume = false;
   bool failRemove = false;
+  Completer<void>? volumeGate; // when set, setVolume waits for it
 
   @override
   Future<DevicesSnapshot> getDevices() async => snapshot;
@@ -21,6 +24,7 @@ class FakeClient extends RoomcastApiClient {
   @override
   Future<void> setVolume(String id, int level) async {
     calls.add('volume $id $level');
+    if (volumeGate != null) await volumeGate!.future;
     if (failVolume) throw ApiException('speaker offline', statusCode: 500);
   }
 
@@ -88,6 +92,31 @@ void main() {
     await tester.pumpAndSettle();
     expect(client.calls, ['volume cast ${dragged.round()}']);
     expect(find.text('${dragged.round()}'), findsOneWidget);
+  });
+
+  testWidgets('the thumb keeps following a new drag when an earlier request completes', (tester) async {
+    final client = await pumpCard(tester);
+    client.volumeGate = Completer<void>();
+    final slider = find.byType(Slider);
+    final width = tester.getSize(slider).width;
+    final left = tester.getTopLeft(slider);
+
+    // Drag 1: release near 80 — its request stays in flight.
+    final first = await tester.startGesture(tester.getCenter(slider));
+    await first.moveTo(Offset(left.dx + width * 0.8, tester.getCenter(slider).dy));
+    await first.up();
+    await tester.pump();
+    // Drag 2: hold near 30.
+    final second = await tester.startGesture(tester.getCenter(slider));
+    await second.moveTo(Offset(left.dx + width * 0.3, tester.getCenter(slider).dy));
+    await tester.pump();
+    final held = tester.widget<Slider>(slider).value;
+
+    client.volumeGate!.complete(); // drag 1's request finishes mid-drag
+    await tester.pump();
+    expect(tester.widget<Slider>(slider).value, held, reason: 'no jump while the finger is down');
+    await second.up();
+    await tester.pumpAndSettle();
   });
 
   testWidgets('failed volume change rolls back and shows the error', (tester) async {

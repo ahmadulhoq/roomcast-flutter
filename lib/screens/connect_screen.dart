@@ -84,13 +84,16 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   'Searching for Roomcast FM on your network…',
                   textAlign: TextAlign.center,
                 ),
-              ] else ...[
+              ] else
                 FilledButton.icon(
                   onPressed: () =>
                       ref.read(sp.serviceProvider.notifier).scanAndConnect(),
                   icon: const Icon(Icons.search),
                   label: const Text('Find Service Automatically'),
                 ),
+              // Manual entry stays available while a scan runs (it can take
+              // up to ~8 s, after a failed saved address up to ~18 s).
+              ...[
                 const SizedBox(height: 24),
                 const Row(children: [
                   Expanded(child: Divider()),

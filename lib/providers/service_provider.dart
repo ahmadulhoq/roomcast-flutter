@@ -48,11 +48,19 @@ typedef ServiceFinder = Future<String?> Function();
 final serviceFinderProvider =
     Provider<ServiceFinder>((ref) => ServiceDiscovery.findService);
 
+/// Creates the REST client for a base URL (overridable in tests).
+typedef ApiClientFactory = RoomcastApiClient Function(String baseUrl);
+
+final apiClientFactoryProvider =
+    Provider<ApiClientFactory>((ref) => RoomcastApiClient.new);
+
 class ServiceNotifier extends StateNotifier<ServiceState> {
-  ServiceNotifier(this._findService)
-      : super(const ServiceState(status: ConnectionState.idle));
+  ServiceNotifier(this._findService, {ApiClientFactory? clientFactory})
+      : _newClient = clientFactory ?? RoomcastApiClient.new,
+        super(const ServiceState(status: ConnectionState.idle));
 
   final ServiceFinder _findService;
+  final ApiClientFactory _newClient;
 
   /// Why the last connect attempt failed (e.g. the saved address at launch),
   /// kept so a following failed scan doesn't hide it.
@@ -86,18 +94,22 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   /// Connect to a specific base URL (from manual entry or saved pref).
   Future<void> connectTo(String baseUrl) async {
-    final client = RoomcastApiClient(baseUrl);
+    final client = _newClient(baseUrl);
     try {
       await client.getInfo();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefKey, baseUrl);
       _lastConnectError = null;
+      final previous = state.client;
       state = ServiceState(
         status: ConnectionState.connected,
         baseUrl: baseUrl,
         client: client,
       );
+      // Close the replaced connection's HTTP client.
+      if (previous != null && !identical(previous, client)) previous.dispose();
     } catch (e) {
+      client.dispose(); // don't leak the failed attempt's HTTP client
       _lastConnectError = 'Could not reach service at $baseUrl: $e';
       state = ServiceState(
         status: ConnectionState.error,
@@ -114,5 +126,8 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
 final serviceProvider =
     StateNotifierProvider<ServiceNotifier, ServiceState>((ref) {
-  return ServiceNotifier(ref.watch(serviceFinderProvider));
+  return ServiceNotifier(
+    ref.watch(serviceFinderProvider),
+    clientFactory: ref.watch(apiClientFactoryProvider),
+  );
 });

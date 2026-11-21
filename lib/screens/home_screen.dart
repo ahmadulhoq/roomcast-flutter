@@ -48,7 +48,8 @@ class HomeScreen extends ConsumerWidget {
         children: [
           _ServiceStatusBar(
             serviceState: serviceState,
-            streaming: devicesAsync.valueOrNull?.streaming,
+            // Unknown while the backend can't be reached (don't show stale state).
+            streaming: devicesAsync.hasError ? null : devicesAsync.valueOrNull?.streaming,
           ),
           // A failed background refresh keeps the last list on screen (so a
           // Wi-Fi blip doesn't cut off a volume drag) and shows this banner.

@@ -19,6 +19,9 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
   /// null when not dragging, then the device's volume is shown.
   double? _dragVolume;
 
+  /// True while the user's finger is on the slider.
+  bool _dragging = false;
+
   /// True while an enable/disable request is in flight.
   bool _togglingEnabled = false;
 
@@ -82,8 +85,11 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
   }
 
   Future<void> _setVolume(double value) async {
+    _dragging = false;
     await _run(() => _notifier.setVolume(device.id, value.round()), 'Could not set volume');
-    if (mounted) setState(() => _dragVolume = null);
+    // A new drag may have started while this request was in flight: keep
+    // following the finger instead of jumping back.
+    if (mounted && !_dragging) setState(() => _dragVolume = null);
   }
 
   @override
@@ -157,6 +163,7 @@ class _DeviceCardState extends ConsumerState<DeviceCard> {
                       min: 0,
                       max: 100,
                       divisions: 20,
+                      onChangeStart: (_) => _dragging = true,
                       onChanged: (v) => setState(() => _dragVolume = v),
                       onChangeEnd: _setVolume,
                     ),
