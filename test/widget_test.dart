@@ -494,7 +494,9 @@ void main() {
       '192.168.1.5',               // bare host → the backend's port
       '192.168.1.5:80',            // an explicit :80 stays :80
       'http://192.168.1.5',        // an explicit scheme is taken as typed
-      'https://proxy.example/roomcast?token=x',
+      'https://proxy.example/roomcast?token=x', // a query would swallow the request paths
+      'http://nas.local/api',      // a proxy mount named api is kept
+      'http://192.168.1.5:8888/api/info?x=1',
     ]) {
       SharedPreferences.setMockInitialValues({'service_base_url': saved});
       final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
@@ -508,7 +510,9 @@ void main() {
       'http://192.168.1.5:8888',
       'http://192.168.1.5',
       'http://192.168.1.5',
-      'https://proxy.example/roomcast?token=x',
+      'https://proxy.example/roomcast',
+      'http://nas.local/api',
+      'http://192.168.1.5:8888',
     ]);
   });
 
