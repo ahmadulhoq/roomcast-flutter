@@ -52,6 +52,18 @@ void main() {
     expect(client.added, ['kef'], reason: 'a second POST would replace the output just created');
     client.gate.complete();
     await tester.pumpAndSettle();
+    expect(find.textContaining('Failed to add'), findsNothing, reason: 'the second tap is not a failure');
+  });
+
+  test('a second add of the same id while the first runs is not reported as a failure', () async {
+    final client = SlowAddClient();
+    final notifier = ScanNotifier(client);
+    const kef = DiscoveredDevice(name: 'KEF', type: DeviceType.dlna, idSuggestion: 'kef');
+    final first = notifier.addDevice(kef, 'kef');
+    expect(await notifier.addDevice(kef, 'kef'), ScanNotifier.alreadyAdding);
+    client.gate.complete();
+    expect(await first, isNull);
+    notifier.dispose();
   });
 
   testWidgets('"Scan again" during an add does not allow a second one', (tester) async {

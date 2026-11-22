@@ -144,6 +144,10 @@ class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
         .read(scanProvider.notifier)
         .addDevice(device, device.idSuggestion);
 
+    if (error == ScanNotifier.alreadyAdding) {
+      if (mounted) setState(() => _adding = false);
+      return; // a second tap: the first add shows the outcome
+    }
     if (error == null) {
       if (devices.mounted) unawaited(devices.refresh()); // the paired list
       messenger.showSnackBar(SnackBar(content: Text('$name added')));

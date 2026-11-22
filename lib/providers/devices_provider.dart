@@ -319,9 +319,14 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
 
   bool isAdding(String id) => _addingIds.state.contains(id);
 
-  /// Pair a discovered device. Returns null on success, else an error message.
+  /// What addDevice returns for a second tap while the first add runs:
+  /// not a failure — the first add reports the outcome.
+  static const alreadyAdding = '';
+
+  /// Pair a discovered device. Returns null on success, [alreadyAdding] if
+  /// that id is already being added, else an error message.
   Future<String?> addDevice(DiscoveredDevice discovered, String id) async {
-    if (isAdding(id)) return 'it is already being added';
+    if (isAdding(id)) return alreadyAdding;
     _addingIds.state = {..._addingIds.state, id};
     try {
       final config = discovered.toDeviceConfig(id: id);

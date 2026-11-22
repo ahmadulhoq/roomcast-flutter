@@ -563,6 +563,32 @@ void main() {
     notifier.dispose();
   });
 
+  testWidgets('a mistyped port or an upper-case pasted endpoint is handled', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'user_disconnected': true}); // no auto-scan
+    final urls = <String>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() async => null),
+          apiClientFactoryProvider.overrideWithValue((url) {
+            urls.add(url);
+            return _FakeApi(url, reachable: false);
+          }),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '192.168.1.5:99999');
+    await tester.tap(find.byType(OutlinedButton));
+    await tester.pumpAndSettle();
+    expect(urls, isEmpty, reason: 'the input hint, not a network error');
+    await tester.enterText(find.byType(TextField), 'Host:8888/API/info');
+    await tester.tap(find.byType(OutlinedButton));
+    await tester.pumpAndSettle();
+    expect(urls, ['http://host:8888']);
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

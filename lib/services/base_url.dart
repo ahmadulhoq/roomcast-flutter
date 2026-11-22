@@ -24,9 +24,10 @@ String? normalizeBaseUrl(String raw) {
   if (uri == null || uri.host.isEmpty) return null;
   if (uri.scheme != 'http' && uri.scheme != 'https') return null;
   if (uri.userInfo.isNotEmpty) return null;
+  if (uri.hasPort && (uri.port < 1 || uri.port > 65535)) return null; // e.g. a mistyped :99999
   // A pasted endpoint ("…:8888/api/info") means the base before /api. (A
   // bare trailing /api is kept: it may be a reverse proxy's mount path.)
-  final path = uri.path.replaceFirst(RegExp(r'/api/[^/].*$'), '').replaceAll(RegExp(r'/+$'), '');
+  final path = uri.path.replaceFirst(RegExp(r'/api/[^/].*$', caseSensitive: false), '').replaceAll(RegExp(r'/+$'), '');
   final bareHost = !typedScheme && !typedPort && path.isEmpty;
   final port = uri.hasPort ? uri.port : (bareHost ? defaultBackendPort : null);
   return Uri(
