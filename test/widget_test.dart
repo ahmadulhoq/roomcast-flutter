@@ -550,6 +550,19 @@ void main() {
     expect(find.textContaining('no user name or password'), findsOneWidget);
   });
 
+  test('a saved address with credentials is forgotten, not used', () async {
+    SharedPreferences.setMockInitialValues({'service_base_url': 'http://user:pass@192.168.1.5:8888'});
+    final urls = <String>[];
+    final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
+      urls.add(url);
+      return _FakeApi(url, reachable: true);
+    });
+    await notifier.loadSaved();
+    expect(urls, isEmpty, reason: 'it would be shown and saved again in plain text');
+    expect((await SharedPreferences.getInstance()).getString('service_base_url'), isNull);
+    notifier.dispose();
+  });
+
   test('disconnect forgets the saved address', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = ServiceNotifier(() async => null,

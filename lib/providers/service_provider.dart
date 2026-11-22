@@ -134,7 +134,14 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     if (saved != null) {
       // Older versions saved what was typed ("http://x:8888/" → "//api/info"
       // 404s); a successful connect saves the normalized URL.
-      await _connect(normalizeBaseUrl(saved) ?? saved, ++_attempt, savedAddress: true);
+      final url = normalizeBaseUrl(saved);
+      if (url == null) {
+        // Not a usable address — or one with a user name and password, which
+        // must not be shown or kept in plain text: forget it.
+        await _writePrefs((prefs) async => prefs.remove(_prefKey));
+        return;
+      }
+      await _connect(url, ++_attempt, savedAddress: true);
     }
   }
 
