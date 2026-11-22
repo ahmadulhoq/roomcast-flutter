@@ -140,8 +140,9 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   Future<void> scanAndConnect() async {
     final attempt = ++_attempt;
     _scans.add(attempt);
-    if (!_lastConnectErrorIsSaved) _lastConnectError = null; // from before this scan
-    _lastConnectErrorIsSaved = false;
+    // An older failed attempt isn't this scan's business — except the saved
+    // address's, kept until a connect succeeds or another attempt fails.
+    if (!_lastConnectErrorIsSaved) _lastConnectError = null;
     if (_connected == null) state = const ServiceState(status: ConnectionState.scanning);
     // The scan counts as running until its own connect is done too, so a
     // manual connect failing meanwhile is shown next to its progress.

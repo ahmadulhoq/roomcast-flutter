@@ -121,7 +121,8 @@ class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
         device.type == DeviceType.chromecast ? 'Google Cast' : 'DLNA / UPnP',
       ),
       trailing: FilledButton(
-        onPressed: _adding || ref.read(scanProvider.notifier).isAdding(device.idSuggestion)
+        // Watched: a tile rebuilt by "Scan again" re-enables when the add ends.
+        onPressed: _adding || ref.watch(addingDevicesProvider).contains(device.idSuggestion)
             ? null
             : _addDevice,
         child: const Text('Add'),
@@ -136,6 +137,7 @@ class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
     final devices = ref.read(devicesProvider.notifier);
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
     final name = device.name;
     // Use id_suggestion as the device id, deduplicated at API level
     final error = await ref
@@ -145,7 +147,9 @@ class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
     if (error == null) {
       if (devices.mounted) unawaited(devices.refresh()); // the paired list
       messenger.showSnackBar(SnackBar(content: Text('$name added')));
-      if (mounted) navigator.pop();
+      // Close the scan screen if it is still the one on top (this tile may
+      // have been rebuilt meanwhile; the screen is what matters).
+      if (route != null && route.isCurrent) navigator.pop();
     } else {
       messenger.showSnackBar(
         SnackBar(content: Text('Failed to add $name: $error'), backgroundColor: Colors.red),

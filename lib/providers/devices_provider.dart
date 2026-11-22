@@ -156,7 +156,11 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
       _server = snapshot;
       _pendingVolumes.removeWhere(
           (_, p) => p.confirmedAtSeq != null && seq > p.confirmedAtSeq!);
-      state = AsyncValue.data(_withPending(snapshot));
+      final shown = _withPending(snapshot);
+      // Nothing changed (most polls): leave the state alone, so the list
+      // isn't rebuilt every few seconds.
+      if (state is AsyncData<DevicesSnapshot> && !state.isLoading && state.value == shown) return;
+      state = AsyncValue.data(shown);
     } catch (e, st) {
       if (mounted && seq == _requestSeq) {
         state = AsyncValue<DevicesSnapshot>.error(e, st).copyWithPrevious(state);
@@ -265,8 +269,10 @@ final devicesProvider = StateNotifierProvider<DevicesNotifier,
 // Network scan results
 // ------------------------------------------------------------------
 
+/// Device ids with an add request in flight (the Add buttons watch it).
+final addingDevicesProvider = StateProvider<Set<String>>((ref) => const <String>{});
+
 class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
-  ScanNotifier(this._client) : super(const AsyncValue.data([]));
 
   final RoomcastApiClient _client;
 
@@ -285,16 +291,22 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
     }
   }
 
-  /// Ids with an add request in flight. Kept here, not in the list tile: a
-  /// "Scan again" rebuilds the tiles, and a second add of the same id would
-  /// make the backend replace the output it has just created.
-  final _adding = <String>{};
+  ScanNotifier(this._client, {StateController<Set<String>>? adding})
+      : _addingIds = adding ?? StateController(<String>{}),
+        super(const AsyncValue.data([]));
 
-  bool isAdding(String id) => _adding.contains(id);
+  /// Ids with an add request in flight, watched by the list tiles (see
+  /// [addingDevicesProvider]). Kept outside the tiles: a "Scan again"
+  /// rebuilds them, and a second add of the same id would make the backend
+  /// replace the output it has just created.
+  final StateController<Set<String>> _addingIds;
+
+  bool isAdding(String id) => _addingIds.state.contains(id);
 
   /// Pair a discovered device. Returns null on success, else an error message.
   Future<String?> addDevice(DiscoveredDevice discovered, String id) async {
-    if (!_adding.add(id)) return 'it is already being added';
+    if (isAdding(id)) return 'it is already being added';
+    _addingIds.state = {..._addingIds.state, id};
     try {
       final config = discovered.toDeviceConfig(id: id);
       await _client.addDevice(config);
@@ -304,7 +316,7 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
     } catch (e) {
       return e.toString();
     } finally {
-      _adding.remove(id);
+      _addingIds.state = {..._addingIds.state}..remove(id);
     }
   }
 }
@@ -316,9 +328,9 @@ final scanProvider = StateNotifierProvider<ScanNotifier,
   if (client == null) {
     final placeholder = _NullClient();
     ref.onDispose(placeholder.dispose);
-    return ScanNotifier(placeholder);
+    return ScanNotifier(placeholder, adding: ref.read(addingDevicesProvider.notifier));
   }
-  return ScanNotifier(client);
+  return ScanNotifier(client, adding: ref.read(addingDevicesProvider.notifier));
 });
 
 // ------------------------------------------------------------------

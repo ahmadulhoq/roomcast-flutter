@@ -127,6 +127,21 @@ class PairedDevice {
       error: error,
     );
   }
+
+  // Value equality: an unchanged poll result doesn't rebuild the list.
+  @override
+  bool operator ==(Object other) =>
+      other is PairedDevice &&
+      other.id == id &&
+      other.name == name &&
+      other.type == type &&
+      other.enabled == enabled &&
+      other.state == state &&
+      other.volume == volume &&
+      other.error == error;
+
+  @override
+  int get hashCode => Object.hash(id, name, type, enabled, state, volume, error);
 }
 
 /// Paired devices plus whether the backend is streaming audio right now.
@@ -150,4 +165,19 @@ class DevicesSnapshot {
 
   DevicesSnapshot copyWith({List<PairedDevice>? devices}) =>
       DevicesSnapshot(streaming: streaming, devices: devices ?? this.devices);
+
+  @override
+  bool operator ==(Object other) =>
+      other is DevicesSnapshot && other.streaming == streaming && _listEquals(other.devices, devices);
+
+  @override
+  int get hashCode => Object.hash(streaming, Object.hashAll(devices));
+}
+
+bool _listEquals<T>(List<T> a, List<T> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }

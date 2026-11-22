@@ -488,9 +488,15 @@ void main() {
     expect(urls, ['http://192.168.1.5:8888'], reason: 'not port 80');
   });
 
-  test('http:// without a port gets the backend port (not with a path)', () async {
+  test('only a bare host gets the backend port; what was typed is kept', () async {
     final urls = <String>[];
-    for (final saved in ['http://192.168.1.5', 'http://nas.local/roomcast', 'https://roomcast.example']) {
+    for (final saved in [
+      '192.168.1.5',               // bare host → the backend's port
+      '192.168.1.5:80',            // an explicit :80 stays :80
+      'http://192.168.1.5',        // an explicit scheme is taken as typed
+      'http://user:pw@host:8888/', // credentials kept (authenticating proxy)
+      'https://proxy.example/roomcast?token=x',
+    ]) {
       SharedPreferences.setMockInitialValues({'service_base_url': saved});
       final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
         urls.add(url);
@@ -499,7 +505,24 @@ void main() {
       await notifier.loadSaved();
       notifier.dispose();
     }
-    expect(urls, ['http://192.168.1.5:8888', 'http://nas.local/roomcast', 'https://roomcast.example']);
+    expect(urls, [
+      'http://192.168.1.5:8888',
+      'http://192.168.1.5',
+      'http://192.168.1.5',
+      'http://user:pw@host:8888',
+      'https://proxy.example/roomcast?token=x',
+    ]);
+  });
+
+  test('the saved address failure stays shown through retry scans', () async {
+    SharedPreferences.setMockInitialValues({'service_base_url': 'http://192.168.1.50:8888'});
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: false));
+    await notifier.loadSaved();        // the saved address fails at launch
+    await notifier.scanAndConnect();   // the auto-scan fails (iOS prompt up)
+    await notifier.scanAndConnect();   // the retry on resume fails too
+    expect(notifier.state.errorMessage, contains('192.168.1.50'));
+    notifier.dispose();
   });
 
   test('disconnect forgets the saved address', () async {

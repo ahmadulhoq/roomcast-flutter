@@ -437,7 +437,7 @@ void main() {
     expect(find.textContaining('Failed to load devices'), findsOneWidget);
   });
 
-  testWidgets('a background poll changes the state once, not twice', (tester) async {
+  testWidgets('a background poll changes the state once if anything changed, else not at all', (tester) async {
     final client = SlowClient();
     final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
     client.pending[0].complete(snap({'cast': 50}));
@@ -445,7 +445,11 @@ void main() {
     var changes = 0;
     final remove = notifier.addListener((_) => changes++, fireImmediately: false);
     await tester.pump(const Duration(seconds: 5)); // poll sent
-    client.pending[1].complete(snap({'cast': 50}));
+    client.pending[1].complete(snap({'cast': 50}));  // nothing changed
+    await tester.pump();
+    expect(changes, 0, reason: 'an unchanged list is not rebuilt every 5 s');
+    await tester.pump(const Duration(seconds: 5));
+    client.pending[2].complete(snap({'cast': 60}));  // the volume changed
     await tester.pump();
     expect(changes, 1, reason: 'no "loading" state for a poll: the list would rebuild twice');
     remove();

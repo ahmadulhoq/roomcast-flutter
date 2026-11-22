@@ -21,10 +21,13 @@ class SlowAddClient extends RoomcastApiClient {
     return const [DiscoveredDevice(name: 'KEF', type: DeviceType.dlna, idSuggestion: 'kef')];
   }
 
+  bool fail = false;
+
   @override
   Future<void> addDevice(Map<String, dynamic> config) async {
     added.add(config['id'] as String);
     await gate.future;
+    if (fail) throw ApiException('speaker busy');
   }
 
   @override
@@ -36,7 +39,7 @@ void main() {
     final client = SlowAddClient();
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        scanProvider.overrideWith((ref) => ScanNotifier(client)),
+        scanProvider.overrideWith((ref) => ScanNotifier(client, adding: ref.read(addingDevicesProvider.notifier))),
         devicesProvider.overrideWith((ref) => DevicesNotifier(client)),
       ],
       child: const MaterialApp(home: ScanScreen()),
@@ -53,13 +56,15 @@ void main() {
 
   testWidgets('"Scan again" during an add does not allow a second one', (tester) async {
     final client = SlowAddClient();
+    final navigator = GlobalKey<NavigatorState>();
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        scanProvider.overrideWith((ref) => ScanNotifier(client)),
+        scanProvider.overrideWith((ref) => ScanNotifier(client, adding: ref.read(addingDevicesProvider.notifier))),
         devicesProvider.overrideWith((ref) => DevicesNotifier(client)),
       ],
-      child: const MaterialApp(home: Scaffold(body: ScanScreen())),
+      child: MaterialApp(navigatorKey: navigator, home: const Scaffold(body: Text('home'))),
     ));
+    navigator.currentState!.push(MaterialPageRoute(builder: (_) => const ScanScreen()));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add'));
     await tester.pump();
@@ -73,5 +78,28 @@ void main() {
     client.gate.complete();
     await tester.pumpAndSettle();
     expect(find.text('KEF added'), findsOneWidget, reason: "the first add's result is still shown");
+    expect(find.text('home'), findsOneWidget, reason: 'the scan screen closed after the add');
+  });
+
+  testWidgets('a rebuilt tile is enabled again when the add fails', (tester) async {
+    final client = SlowAddClient()..fail = true;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        scanProvider.overrideWith((ref) => ScanNotifier(client, adding: ref.read(addingDevicesProvider.notifier))),
+        devicesProvider.overrideWith((ref) => DevicesNotifier(client)),
+      ],
+      child: const MaterialApp(home: ScanScreen()),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Scan again'));
+    await tester.pump();
+    client.rescan.complete();
+    await tester.pumpAndSettle();
+    client.gate.complete(); // the first add fails
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Add')).onPressed, isNotNull,
+        reason: 'the user can retry without another scan');
   });
 }
