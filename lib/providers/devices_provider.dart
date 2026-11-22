@@ -279,7 +279,23 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
   /// Incremented by every scan: only the newest one's result is shown.
   int _scanSeq = 0;
 
-  Future<void> scan() async {
+  /// The scan in progress. Another request while it runs joins it: the
+  /// backend runs scans one at a time, so a second one would only start
+  /// after this one (5–8 s) and then hit the client's 10 s timeout.
+  Future<void>? _scanning;
+
+  Future<void> scan() {
+    final running = _scanning;
+    if (running != null) return running;
+    final future = _scan();
+    _scanning = future;
+    future.whenComplete(() {
+      if (identical(_scanning, future)) _scanning = null;
+    });
+    return future;
+  }
+
+  Future<void> _scan() async {
     final seq = ++_scanSeq;
     state = const AsyncValue.loading();
     try {

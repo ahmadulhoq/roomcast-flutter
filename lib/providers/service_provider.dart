@@ -98,7 +98,9 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   /// Why the last connect attempt failed (e.g. the saved address at launch),
   /// kept so a following failed scan doesn't hide it. A new scan forgets an
-  /// older failure, except the saved address's for the scan right after it.
+  /// older failed attempt, except the saved address's failure at launch: that
+  /// one stays (it says why the app didn't reconnect) until a connect
+  /// succeeds or another attempt fails.
   String? _lastConnectError;
   bool _lastConnectErrorIsSaved = false;
 

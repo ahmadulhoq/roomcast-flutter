@@ -58,11 +58,11 @@ DiscoveredDevice _found(String name) =>
 
 class TwoScansClient extends RoomcastApiClient {
   TwoScansClient() : super('http://test');
-  final results = [Completer<List<DiscoveredDevice>>(), Completer<List<DiscoveredDevice>>()];
-  int _calls = 0;
+  final results = [Completer<List<DiscoveredDevice>>(), Completer<List<DiscoveredDevice>>()..complete([])];
+  int calls = 0;
 
   @override
-  Future<List<DiscoveredDevice>> scan() => results[_calls++].future;
+  Future<List<DiscoveredDevice>> scan() => results[calls++].future;
 }
 
 class SlowScanClient extends RoomcastApiClient {
@@ -269,16 +269,17 @@ void main() {
     notifier.dispose();
   });
 
-  test('an older speaker scan finishing last does not overwrite a newer one', () async {
+  test('"Scan again" while a scan runs joins it instead of queueing another', () async {
     final client = TwoScansClient();
     final notifier = ScanNotifier(client);
     final first = notifier.scan();
     final second = notifier.scan(); // "Scan again" while the first runs
-    client.results[1].complete([_found('new')]);
-    await second;
-    client.results[0].complete([_found('stale')]);
-    await first;
-    expect(notifier.state.value!.map((d) => d.name), ['new']);
+    client.results[0].complete([_found('KEF')]);
+    await Future.wait([first, second]);
+    expect(client.calls, 1, reason: 'a second /api/scan would wait for the first, then time out');
+    expect(notifier.state.value!.map((d) => d.name), ['KEF']);
+    await notifier.scan();                  // a later scan runs normally
+    expect(client.calls, 2);
     notifier.dispose();
   });
 

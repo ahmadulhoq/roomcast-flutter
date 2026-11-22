@@ -494,7 +494,6 @@ void main() {
       '192.168.1.5',               // bare host → the backend's port
       '192.168.1.5:80',            // an explicit :80 stays :80
       'http://192.168.1.5',        // an explicit scheme is taken as typed
-      'http://user:pw@host:8888/', // credentials kept (authenticating proxy)
       'https://proxy.example/roomcast?token=x',
     ]) {
       SharedPreferences.setMockInitialValues({'service_base_url': saved});
@@ -509,7 +508,6 @@ void main() {
       'http://192.168.1.5:8888',
       'http://192.168.1.5',
       'http://192.168.1.5',
-      'http://user:pw@host:8888',
       'https://proxy.example/roomcast?token=x',
     ]);
   });
@@ -523,6 +521,29 @@ void main() {
     await notifier.scanAndConnect();   // the retry on resume fails too
     expect(notifier.state.errorMessage, contains('192.168.1.50'));
     notifier.dispose();
+  });
+
+  testWidgets('an address with credentials is refused, not stored', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'user_disconnected': true}); // no auto-scan
+    final urls = <String>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          serviceFinderProvider.overrideWithValue(() async => null),
+          apiClientFactoryProvider.overrideWithValue((url) {
+            urls.add(url);
+            return _FakeApi(url, reachable: true);
+          }),
+        ],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'admin:secret@192.168.1.5:8888');
+    await tester.tap(find.byType(OutlinedButton));
+    await tester.pumpAndSettle();
+    expect(urls, isEmpty, reason: 'it would be shown in the status bar and saved in plain text');
+    expect(find.textContaining('no user name or password'), findsOneWidget);
   });
 
   test('disconnect forgets the saved address', () async {

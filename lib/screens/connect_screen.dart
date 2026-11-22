@@ -71,7 +71,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     final url = normalizeBaseUrl(_ipController.text);
     if (url == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter an address like 192.168.1.5:8888')),
+        const SnackBar(content: Text('Enter an address like 192.168.1.5:8888 (no user name or password)')),
       );
       return;
     }
