@@ -18,8 +18,9 @@ class _ReplaceCounter extends NavigatorObserver {
 }
 
 class _FakeApi extends RoomcastApiClient {
-  _FakeApi(super.baseUrl, {required this.reachable, this.gate});
+  _FakeApi(super.baseUrl, {required this.reachable, this.gate, this.info = const {'version': '1.0'}});
   final bool reachable;
+  final Map<String, dynamic> info;
   final Future<void>? gate; // getInfo waits for it (a slow backend)
   bool disposed = false;
 
@@ -27,7 +28,7 @@ class _FakeApi extends RoomcastApiClient {
   Future<Map<String, dynamic>> getInfo() async {
     if (gate != null) await gate;
     if (!reachable) throw ApiException('Network error: unreachable');
-    return {'version': '1.0'};
+    return info;
   }
 
   @override
@@ -587,6 +588,35 @@ void main() {
     await tester.tap(find.byType(OutlinedButton));
     await tester.pumpAndSettle();
     expect(urls, ['http://host:8888']);
+  });
+
+  test('a late connect to the same backend under another name keeps the connection', () async {
+    SharedPreferences.setMockInitialValues({});
+    const backend = {'version': '1.0', 'lan_ip': '192.168.1.5', 'port': 8888};
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: true, info: backend));
+    await notifier.connectTo('http://192.168.1.5:8888');     // the scan's find
+    final connected = notifier.state;
+    await notifier.connectTo('http://roomcast.local:8888');  // the manual connect, later
+    expect(identical(notifier.state, connected), isTrue, reason: 'same backend: nothing cut off or rebuilt');
+    notifier.dispose();
+  });
+
+  testWidgets('Find Service no longer repeats the saved address failure', (WidgetTester tester) async {
+    // flutter_test answers every real HTTP request with 400, so the saved URL fails.
+    SharedPreferences.setMockInitialValues({'service_base_url': 'http://192.0.2.10:8888'});
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [serviceFinderProvider.overrideWithValue(() async => null)],
+        child: const RoomcastApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Could not reach service at http://192.0.2.10:8888'), findsOneWidget);
+    await tester.tap(find.text('Find Service Automatically'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No Roomcast FM service found'), findsOneWidget);
+    expect(find.textContaining('192.0.2.10'), findsNothing, reason: 'the user scanned anew');
   });
 
   test('disconnect forgets the saved address', () async {

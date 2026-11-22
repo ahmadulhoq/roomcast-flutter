@@ -75,7 +75,7 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
       case AppLifecycleState.resumed:
         if (_timer == null) {
           _startPolling();
-          refresh(); // catch up at once on return
+          _poll(); // catch up at once on return (unless one is still running)
         }
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
@@ -94,8 +94,6 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// Sequence of the last response applied.
   int _appliedSeq = 0;
 
-  /// The refresh currently in flight, if any.
-  Future<void>? _inFlight;
 
   /// Latest device list as reported by the server (without local changes).
   DevicesSnapshot? _server;
@@ -126,17 +124,18 @@ class DevicesNotifier extends StateNotifier<AsyncValue<DevicesSnapshot>> {
   /// unreachable backend (requests time out after 10 s) can't stack requests
   /// that each invalidate the previous one's result.
   void _poll() {
-    if (_inFlight == null) refresh(background: true);
+    if (_outstanding == 0) refresh(background: true);
   }
+
+  /// Requests still running (any of them: a newer one can finish first).
+  int _outstanding = 0;
 
   /// Reload the list. A [background] refresh (poll) doesn't mark the state
   /// as loading: that would rebuild the whole list twice per poll.
   Future<void> refresh({bool background = false}) {
+    _outstanding++;
     final future = _refresh(background: background);
-    _inFlight = future;
-    future.whenComplete(() {
-      if (identical(_inFlight, future)) _inFlight = null;
-    });
+    future.whenComplete(() => _outstanding--);
     return future;
   }
 
@@ -333,7 +332,8 @@ class ScanNotifier extends StateNotifier<AsyncValue<List<DiscoveredDevice>>> {
       await _client.addDevice(config);
       return null;
     } on ApiException catch (e) {
-      return e.message;
+      // Never empty: '' means "already being added" (alreadyAdding).
+      return e.message.isEmpty ? 'request failed (HTTP ${e.statusCode ?? '?'})' : e.message;
     } catch (e) {
       return e.toString();
     } finally {

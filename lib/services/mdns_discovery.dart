@@ -197,7 +197,12 @@ class ResolveTracker {
   /// is ignored until it is lost).
   void found(BonsoirService service) {
     _everFound = true;
-    if (_attempts.containsKey(service.name)) return;
+    final attempts = _attempts[service.name];
+    final pending = _inFlight?.name == service.name || _queue.any((s) => s.name == service.name);
+    // A re-announce is ignored while that service is queued or resolving,
+    // but one that had used up its attempts (e.g. unreachable for a moment)
+    // gets a fresh start.
+    if (attempts != null && (pending || attempts < maxAttempts)) return;
     _attempts[service.name] = 0;
     _queue.add(service);
   }

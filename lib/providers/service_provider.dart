@@ -98,9 +98,10 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   /// Why the last connect attempt failed (e.g. the saved address at launch),
   /// kept so a following failed scan doesn't hide it. A new scan forgets an
-  /// older failed attempt, except the saved address's failure at launch: that
-  /// one stays (it says why the app didn't reconnect) until a connect
-  /// succeeds or another attempt fails.
+  /// older failed attempt, except the saved address's failure at launch:
+  /// that one stays through the automatic scans (it says why the app didn't
+  /// reconnect) until a connect succeeds, another connect fails, or the user
+  /// starts a scan.
   String? _lastConnectError;
   bool _lastConnectErrorIsSaved = false;
 
@@ -120,6 +121,15 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   /// The working connection, if any. A failed attempt never drops it.
   RoomcastApiClient? _connected;
+
+  /// Which backend it is (its address and port from /api/info), so the
+  /// same backend reached under another URL is recognised.
+  String? _connectedIdentity;
+
+  static String? _identityOf(Map<String, dynamic> info) {
+    final ip = info['lan_ip'], port = info['port'];
+    return ip is String && port != null ? '$ip:$port' : null;
+  }
 
   bool _isStale(int attempt) =>
       !mounted || attempt <= _cancelledUpTo || attempt < _connectedAttempt;
@@ -146,7 +156,10 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
   }
 
   /// Scan mDNS for the backend, then connect.
-  Future<void> scanAndConnect() async {
+  /// [userInitiated]: the user asked for this scan (Find Service): an older
+  /// failure, even the saved address's from launch, isn't its business.
+  Future<void> scanAndConnect({bool userInitiated = false}) async {
+    if (userInitiated) _lastConnectErrorIsSaved = false;
     final attempt = ++_attempt;
     _scans.add(attempt);
     // An older failed attempt isn't this scan's business — except the saved
@@ -179,8 +192,9 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   Future<void> _connect(String baseUrl, int attempt, {bool savedAddress = false}) async {
     final client = _newClient(baseUrl);
+    Map<String, dynamic> info;
     try {
-      await client.getInfo();
+      info = await client.getInfo();
     } catch (e) {
       client.dispose(); // don't leak the failed attempt's HTTP client
       _scans.remove(attempt); // a scan's own connect failed: it's over
@@ -201,14 +215,18 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
       client.dispose();
       return;
     }
-    if (_connected != null && _connected!.baseUrl == baseUrl) {
+    final identity = _identityOf(info);
+    if (_connected != null &&
+        (_connected!.baseUrl == baseUrl || (identity != null && identity == _connectedIdentity))) {
       // Already connected to this backend (e.g. a manual connect to the
-      // address the scan found): keep the working connection rather than
-      // rebuilding everything and cutting off its requests.
+      // address the scan found, as a name or an IP): keep the working
+      // connection rather than rebuilding everything and cutting off its
+      // requests.
       client.dispose();
       return;
     }
     final previous = _connected;
+    _connectedIdentity = identity;
     _connected = client;
     _connectedAttempt = attempt;
     _lastConnectError = null;
@@ -260,6 +278,7 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
     _lastConnectError = null;
     _connected?.dispose();
     _connected = null;
+    _connectedIdentity = null;
     _connectedAttempt = 0;
     state = const ServiceState(status: ConnectionState.idle);
     await _writePrefs((prefs) async {

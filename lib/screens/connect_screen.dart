@@ -84,9 +84,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     }
   }
 
-  void _scan() {
+  void _scan({bool userInitiated = false}) {
     _lastWasScan = true;
-    ref.read(sp.serviceProvider.notifier).scanAndConnect();
+    ref.read(sp.serviceProvider.notifier).scanAndConnect(userInitiated: userInitiated);
   }
 
   @override
@@ -170,7 +170,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                     ),
                   ] else
                     FilledButton.icon(
-                      onPressed: _scan,
+                      onPressed: () => _scan(userInitiated: true),
                       icon: const Icon(Icons.search),
                       label: const Text('Find Service Automatically'),
                     ),

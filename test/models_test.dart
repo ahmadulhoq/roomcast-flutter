@@ -44,6 +44,18 @@ void main() {
       expect(t.next()?.name, 'A');
     });
 
+    test('a service that used up its attempts gets a fresh start when it re-announces', () {
+      final t = ResolveTracker();
+      t.found(s('A'));
+      for (var i = 0; i < 3; i++) {
+        expect(t.next()?.name, 'A');
+        t.failed();
+      }
+      expect(t.next(), isNull, reason: 'attempts used up');
+      t.found(s('A'));                  // re-announced (no lost event between)
+      expect(t.next()?.name, 'A');
+    });
+
     test('everFound stays true after the service is lost', () {
       final t = ResolveTracker();
       expect(t.everFound, isFalse);

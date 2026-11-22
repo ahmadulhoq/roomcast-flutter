@@ -56,6 +56,14 @@ class SlowClient extends RoomcastApiClient {
 DiscoveredDevice _found(String name) =>
     DiscoveredDevice(name: name, type: DeviceType.dlna, idSuggestion: name);
 
+class _EmptyErrorClient extends RoomcastApiClient {
+  _EmptyErrorClient() : super('http://test');
+
+  @override
+  Future<void> addDevice(Map<String, dynamic> config) async =>
+      throw ApiException('', statusCode: 400); // {"error": ""}
+}
+
 class TwoScansClient extends RoomcastApiClient {
   TwoScansClient() : super('http://test');
   final results = [Completer<List<DiscoveredDevice>>(), Completer<List<DiscoveredDevice>>()..complete([])];
@@ -290,6 +298,32 @@ void main() {
     notifier.dispose(); // the connection changed: scanProvider was rebuilt
     client.result.completeError(ApiException('Network error: connection closed'));
     await scanning; // used to throw: state set on a disposed notifier
+  });
+
+  testWidgets('polls never stack, even when a newer request finishes first', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));   // poll A (hangs: backend unreachable)
+    expect(client.pending.length, 2);
+    unawaited(notifier.refresh());                    // a user refresh B
+    client.pending[2].completeError(ApiException('Network error: timeout')); // B fails first
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));   // next tick: A still pending
+    expect(client.pending.length, 3, reason: 'no new poll while A is outstanding');
+    client.pending[1].completeError(ApiException('Network error: timeout'));
+    await tester.pump();
+    notifier.dispose();
+  });
+
+  test('an empty error message from the backend is still reported', () async {
+    final notifier = ScanNotifier(_EmptyErrorClient());
+    final result = await notifier.addDevice(
+        const DiscoveredDevice(name: 'KEF', type: DeviceType.dlna, idSuggestion: 'kef'), 'kef');
+    expect(result, isNot(ScanNotifier.alreadyAdding), reason: "'' means a second tap: it would be dropped");
+    expect(result, contains('400'));
+    notifier.dispose();
   });
 
   testWidgets('a failed enable still re-syncs with the server', (tester) async {
