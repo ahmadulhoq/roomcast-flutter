@@ -128,7 +128,10 @@ class ServiceNotifier extends StateNotifier<ServiceState> {
 
   static String? _identityOf(Map<String, dynamic> info) {
     final ip = info['lan_ip'], port = info['port'];
-    return ip is String && port != null ? '$ip:$port' : null;
+    // A backend without a default route reports 127.0.0.1: that names no
+    // backend in particular (two such would look the same).
+    if (ip is! String || port == null || ip.startsWith('127.') || ip == '0.0.0.0' || ip == '::1') return null;
+    return '$ip:$port';
   }
 
   bool _isStale(int attempt) =>

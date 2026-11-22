@@ -498,6 +498,8 @@ void main() {
       'https://proxy.example/roomcast?token=x', // a query would swallow the request paths
       'http://nas.local/api',      // a proxy mount named api is kept
       'http://192.168.1.5:8888/api/info?x=1',
+      '192.168.1.5:8888/api/',     // the API root pasted
+      'http://nas/api/roomcast',   // a proxy mount containing /api
     ]) {
       SharedPreferences.setMockInitialValues({'service_base_url': saved});
       final notifier = ServiceNotifier(() async => null, clientFactory: (url) {
@@ -514,6 +516,8 @@ void main() {
       'https://proxy.example/roomcast',
       'http://nas.local/api',
       'http://192.168.1.5:8888',
+      'http://192.168.1.5:8888',
+      'http://nas/api/roomcast',
     ]);
   });
 
@@ -617,6 +621,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('No Roomcast FM service found'), findsOneWidget);
     expect(find.textContaining('192.0.2.10'), findsNothing, reason: 'the user scanned anew');
+  });
+
+  test('two backends reporting 127.0.0.1 are not taken for the same one', () async {
+    SharedPreferences.setMockInitialValues({});
+    const noRoute = {'version': '1.0', 'lan_ip': '127.0.0.1', 'port': 8888};
+    final notifier = ServiceNotifier(() async => null,
+        clientFactory: (url) => _FakeApi(url, reachable: true, info: noRoute));
+    await notifier.connectTo('http://192.168.1.5:8888');   // backend A
+    await notifier.connectTo('http://192.168.1.6:8888');   // backend B, the user's pick
+    expect(notifier.state.baseUrl, 'http://192.168.1.6:8888');
+    notifier.dispose();
   });
 
   test('disconnect forgets the saved address', () async {
