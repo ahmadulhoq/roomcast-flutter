@@ -36,13 +36,27 @@ class _Launcher extends ConsumerStatefulWidget {
 
 class _LauncherState extends ConsumerState<_Launcher> {
   bool _checked = false;
+  bool _autoScan = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await ref.read(serviceProvider.notifier).loadSaved();
-      if (mounted) setState(() => _checked = true);
+      final notifier = ref.read(serviceProvider.notifier);
+      var autoScan = true;
+      try {
+        await notifier.loadSaved();
+        // After an explicit Disconnect, don't scan and reconnect by itself.
+        autoScan = !await notifier.userDisconnected();
+      } finally {
+        // Whatever happened, leave the launch spinner.
+        if (mounted) {
+          setState(() {
+            _checked = true;
+            _autoScan = autoScan;
+          });
+        }
+      }
     });
   }
 
@@ -54,6 +68,6 @@ class _LauncherState extends ConsumerState<_Launcher> {
       );
     }
     final state = ref.read(serviceProvider);
-    return state.isConnected ? const HomeScreen() : const ConnectScreen();
+    return state.isConnected ? const HomeScreen() : ConnectScreen(autoScan: _autoScan);
   }
 }

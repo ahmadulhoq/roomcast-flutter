@@ -1,0 +1,527 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:roomcast_fm/models/device.dart';
+import 'package:roomcast_fm/providers/devices_provider.dart';
+import 'package:roomcast_fm/screens/home_screen.dart';
+import 'package:roomcast_fm/providers/service_provider.dart' as sp;
+import 'package:roomcast_fm/services/api_client.dart';
+
+/// A service notifier that starts out connected (the status bar shows the
+/// Streaming/Idle badge only when connected).
+class _ConnectedService extends sp.ServiceNotifier {
+  _ConnectedService(RoomcastApiClient client) : super(() async => null) {
+    state = sp.ServiceState(status: sp.ConnectionState.connected, baseUrl: 'http://test', client: client);
+  }
+}
+
+/// Every getDevices()/setVolume() call waits until the test completes it.
+class SlowClient extends RoomcastApiClient {
+  SlowClient() : super('http://test');
+
+  final pending = <Completer<DevicesSnapshot>>[];
+  final volumeCalls = <Completer<void>>[];
+  final volumeLevels = <int>[];
+  bool failEnable = false;
+  bool failRemove = false;
+
+  @override
+  Future<void> removeDevice(String id) async {
+    if (failRemove) throw ApiException('Network error: timeout');
+  }
+
+  @override
+  Future<void> enableDevice(String id) async {
+    if (failEnable) throw ApiException('speaker offline');
+  }
+
+  @override
+  Future<DevicesSnapshot> getDevices() {
+    final c = Completer<DevicesSnapshot>();
+    pending.add(c);
+    return c.future;
+  }
+
+  @override
+  Future<void> setVolume(String id, int level) {
+    final c = Completer<void>();
+    volumeCalls.add(c);
+    volumeLevels.add(level);
+    return c.future;
+  }
+}
+
+DiscoveredDevice _found(String name) =>
+    DiscoveredDevice(name: name, type: DeviceType.dlna, idSuggestion: name);
+
+class _EmptyErrorClient extends RoomcastApiClient {
+  _EmptyErrorClient() : super('http://test');
+
+  @override
+  Future<void> addDevice(Map<String, dynamic> config) async =>
+      throw ApiException('', statusCode: 400); // {"error": ""}
+}
+
+class TwoScansClient extends RoomcastApiClient {
+  TwoScansClient() : super('http://test');
+  final results = [Completer<List<DiscoveredDevice>>(), Completer<List<DiscoveredDevice>>()..complete([])];
+  int calls = 0;
+
+  @override
+  Future<List<DiscoveredDevice>> scan() => results[calls++].future;
+}
+
+class SlowScanClient extends RoomcastApiClient {
+  SlowScanClient() : super('http://test');
+  final result = Completer<List<DiscoveredDevice>>();
+
+  @override
+  Future<List<DiscoveredDevice>> scan() => result.future;
+}
+
+DevicesSnapshot snap(Map<String, int> volumes) => DevicesSnapshot(streaming: true, devices: [
+      for (final e in volumes.entries)
+        PairedDevice(id: e.key, name: e.key, type: DeviceType.dlna, state: DeviceState.playing, volume: e.value),
+    ]);
+
+int volumeOf(DevicesNotifier n, String id) =>
+    n.state.value!.devices.firstWhere((d) => d.id == id).volume;
+
+void main() {
+  testWidgets('polls do not stack while a request is slow, and its error shows', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    expect(client.pending.length, 1); // initial refresh
+    await tester.pump(const Duration(seconds: 12)); // two poll ticks pass
+    expect(client.pending.length, 1, reason: 'no new request while one is in flight');
+
+    client.pending.single.completeError(ApiException('Network error: timeout'));
+    await tester.pump();
+    expect(notifier.state.hasError, isTrue, reason: 'the timed-out request is not discarded');
+
+    await tester.pump(const Duration(seconds: 5));
+    expect(client.pending.length, 2, reason: 'polling resumes once the request finished');
+    notifier.dispose();
+  });
+
+  testWidgets('a refresh in flight does not undo a volume change', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    unawaited(notifier.refresh()); // e.g. a poll, carrying the old level
+    final change = notifier.setVolume('cast', 80);
+    expect(volumeOf(notifier, 'cast'), 80);
+    client.pending[1].complete(snap({'cast': 50}));
+    client.volumeCalls.single.complete();
+    await change;
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
+  testWidgets('a failed volume change rolls back only that device', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'a': 50, 'b': 30}));
+    await tester.pump();
+
+    final change = notifier.setVolume('a', 80);
+    unawaited(notifier.refresh()); // newer data arrives while the request is pending
+    client.pending[1].complete(snap({'a': 50, 'b': 35})); // server hasn't applied 80
+    await tester.pump();
+    expect(volumeOf(notifier, 'a'), 80, reason: 'pending change stays shown');
+    client.volumeCalls.single.completeError(ApiException('speaker offline'));
+    await expectLater(change, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'a'), 50, reason: "back to the server's level");
+    expect(volumeOf(notifier, 'b'), 35, reason: "the other device's update is kept");
+    expect(client.pending.length, 3, reason: 're-syncs after a failure');
+    notifier.dispose();
+  });
+
+  testWidgets('a refresh that started before the server applied a change keeps it shown', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final change = notifier.setVolume('cast', 80);  // POST in flight
+    unawaited(notifier.refresh());                    // poll starts during the POST
+    client.volumeCalls.single.complete();             // POST succeeds…
+    await change;
+    client.pending[1].complete(snap({'cast': 50}));   // …then the earlier poll lands
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80, reason: 'the poll predates the change');
+
+    unawaited(notifier.refresh());                    // a later refresh confirms it
+    client.pending[2].complete(snap({'cast': 80}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
+  testWidgets('an earlier failed change does not undo a later one, and reports nothing', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 80);
+    final second = notifier.setVolume('cast', 30);
+    client.volumeCalls[0].completeError(ApiException('timeout'));
+    await first; // superseded by the 30: its failure doesn't matter (no snackbar)
+    await tester.pump();
+    client.volumeCalls[1].complete();
+    await second;
+    expect(volumeOf(notifier, 'cast'), 30);
+    notifier.dispose();
+  });
+
+  testWidgets('volume requests for one device go out one at a time, in order', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 40);
+    final second = notifier.setVolume('cast', 80);
+    await tester.pump();
+    expect(client.volumeLevels, [40], reason: 'the 80 waits: on another connection it could arrive first');
+    client.volumeCalls[0].complete();
+    await first;
+    await tester.pump();
+    expect(client.volumeLevels, [40, 80]);
+    client.volumeCalls[1].complete();
+    await second;
+    notifier.dispose();
+  });
+
+  testWidgets('a failed change after an accepted one falls back to the accepted level', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 80);
+    client.volumeCalls[0].complete();
+    await first; // the server has 80 now; no refresh has reported it yet
+    final second = notifier.setVolume('cast', 30);
+    client.volumeCalls[1].completeError(ApiException('timeout'));
+    await expectLater(second, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 80, reason: 'not the stale 50 from the last refresh');
+    // A refresh started after the 80 was accepted reports it; the overlay goes.
+    client.pending.last.complete(snap({'cast': 80}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
+  testWidgets('a failed change falls back to the one before it, accepted but not reported yet', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 10}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 30);
+    final second = notifier.setVolume('cast', 60); // queued behind the 30
+    client.volumeCalls[0].complete();
+    await first;
+    await tester.pump();
+    client.volumeCalls[1].completeError(ApiException('timeout'));
+    await expectLater(second, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 30, reason: 'the server has 30; not the stale 10');
+    client.pending.last.complete(snap({'cast': 30}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 30);
+    notifier.dispose();
+  });
+
+  testWidgets('when every change in a row fails, the server level is shown', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final first = notifier.setVolume('cast', 30);
+    final second = notifier.setVolume('cast', 60);
+    client.volumeCalls[0].completeError(ApiException('speaker offline'));
+    await first; // superseded: no error of its own
+    await tester.pump();
+    client.volumeCalls[1].completeError(ApiException('speaker offline'));
+    await expectLater(second, throwsA(isA<ApiException>()));
+    expect(volumeOf(notifier, 'cast'), 50, reason: 'not the failed 30');
+    client.pending.last.complete(snap({'cast': 50}));
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 50);
+    notifier.dispose();
+  });
+
+  testWidgets('an older refresh that succeeds is shown even if a newer one fails', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    unawaited(notifier.refresh()); // A
+    unawaited(notifier.refresh()); // B (e.g. tapped twice)
+    client.pending[1].complete(snap({'cast': 80})); // A answers
+    await tester.pump();
+    expect(volumeOf(notifier, 'cast'), 80, reason: 'fresher than what was shown');
+    client.pending[2].completeError(ApiException('Network error: timeout')); // B times out
+    await tester.pump();
+    expect(notifier.state.hasError, isTrue);
+    expect(volumeOf(notifier, 'cast'), 80);
+    notifier.dispose();
+  });
+
+  test('"Scan again" while a scan runs joins it instead of queueing another', () async {
+    final client = TwoScansClient();
+    final notifier = ScanNotifier(client);
+    final first = notifier.scan();
+    final second = notifier.scan(); // "Scan again" while the first runs
+    client.results[0].complete([_found('KEF')]);
+    await Future.wait([first, second]);
+    expect(client.calls, 1, reason: 'a second /api/scan would wait for the first, then time out');
+    expect(notifier.state.value!.map((d) => d.name), ['KEF']);
+    await notifier.scan();                  // a later scan runs normally
+    expect(client.calls, 2);
+    notifier.dispose();
+  });
+
+  test('a speaker scan finishing after the connection changed is ignored', () async {
+    final client = SlowScanClient();
+    final notifier = ScanNotifier(client);
+    final scanning = notifier.scan();
+    notifier.dispose(); // the connection changed: scanProvider was rebuilt
+    client.result.completeError(ApiException('Network error: connection closed'));
+    await scanning; // used to throw: state set on a disposed notifier
+  });
+
+  testWidgets('polls never stack, even when a newer request finishes first', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));   // poll A (hangs: backend unreachable)
+    expect(client.pending.length, 2);
+    unawaited(notifier.refresh());                    // a user refresh B
+    client.pending[2].completeError(ApiException('Network error: timeout')); // B fails first
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));   // next tick: A still pending
+    expect(client.pending.length, 3, reason: 'no new poll while A is outstanding');
+    client.pending[1].completeError(ApiException('Network error: timeout'));
+    await tester.pump();
+    notifier.dispose();
+  });
+
+  test('an empty error message from the backend is still reported', () async {
+    final notifier = ScanNotifier(_EmptyErrorClient());
+    final result = await notifier.addDevice(
+        const DiscoveredDevice(name: 'KEF', type: DeviceType.dlna, idSuggestion: 'kef'), 'kef');
+    expect(result, isNot(ScanNotifier.alreadyAdding), reason: "'' means a second tap: it would be dropped");
+    expect(result, contains('400'));
+    notifier.dispose();
+  });
+
+  testWidgets('a failed enable still re-syncs with the server', (tester) async {
+    final client = SlowClient()..failEnable = true;
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    final toggle = notifier.setEnabled('cast', true);
+    await tester.pump();
+    expect(client.pending.length, 2, reason: 'refresh runs even though the request failed');
+    client.pending[1].complete(snap({'cast': 50}));
+    await expectLater(toggle, throwsA(isA<ApiException>()));
+    notifier.dispose();
+  });
+
+  testWidgets('a local volume change while offline keeps the offline error', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+    unawaited(notifier.refresh());
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pump();
+    expect(notifier.state.hasError, isTrue);
+
+    unawaited(notifier.setVolume('cast', 70).catchError((Object _) {}));
+    await tester.pump();
+    expect(notifier.state.hasError, isTrue, reason: 'banner must stay');
+    expect(volumeOf(notifier, 'cast'), 70);
+    notifier.dispose();
+  });
+
+  testWidgets('refresh after dispose is a no-op', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client);
+    notifier.dispose();
+    await notifier.refresh(); // must not throw "used after dispose"
+    expect(client.pending.length, 1);
+  });
+
+  testWidgets('polling pauses in the background and catches up on return', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+
+    // The framework moves through each state (resumed → inactive → hidden → paused).
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await tester.pump(const Duration(seconds: 16));
+    expect(client.pending.length, 1, reason: 'no polls while backgrounded');
+
+    for (final s in [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await tester.pump();
+    expect(client.pending.length, 2, reason: 'refreshes at once on return');
+    client.pending[1].complete(snap({'cast': 50}));
+    await tester.pump(const Duration(seconds: 5));
+    expect(client.pending.length, 3, reason: 'polling resumed');
+    notifier.dispose();
+  });
+
+  testWidgets('a notifier created while backgrounded does not poll until resumed', (tester) async {
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump(const Duration(seconds: 16));
+    expect(client.pending.length, 1, reason: 'no polling in the background');
+    for (final s in [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await tester.pump();
+    expect(client.pending.length, 2);
+    notifier.dispose();
+  });
+
+  testWidgets('a failed remove still re-syncs with the server', (tester) async {
+    final client = SlowClient()..failRemove = true;
+    final notifier = DevicesNotifier(client);
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+    final removal = notifier.remove('cast');
+    await tester.pump();
+    expect(client.pending.length, 2);
+    client.pending[1].complete(snap({}));
+    await expectLater(removal, throwsA(isA<ApiException>()));
+    expect(notifier.state.value!.devices, isEmpty, reason: 'it was removed after all');
+    notifier.dispose();
+  });
+
+  testWidgets('the Streaming badge is hidden while the backend is unreachable', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        sp.serviceProvider.overrideWith((ref) => _ConnectedService(client)),
+        devicesProvider.overrideWith((ref) => DevicesNotifier(client)),
+      ],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].complete(snap({'Dining Room': 50}));
+    await tester.pumpAndSettle();
+    expect(find.text('Streaming'), findsOneWidget, reason: 'shown while reachable');
+    await tester.tap(find.byIcon(Icons.refresh));
+    await tester.pump();
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    expect(find.text('Streaming'), findsNothing);
+    expect(find.text('Idle'), findsNothing);
+  });
+
+  testWidgets('a failed refresh keeps the list and shows a banner', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        devicesProvider.overrideWith((ref) => DevicesNotifier(client)),
+      ],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].complete(snap({'Dining Room': 50}));
+    await tester.pumpAndSettle();
+    expect(find.text('Dining Room'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.refresh));
+    await tester.pump();
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    expect(find.text('Dining Room'), findsOneWidget, reason: 'list stays on screen');
+    expect(find.textContaining("Can't reach Roomcast FM"), findsOneWidget);
+    expect(find.textContaining('Failed to load devices'), findsNothing);
+  });
+
+  testWidgets('first load failing still shows the error view', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [devicesProvider.overrideWith((ref) => DevicesNotifier(client))],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Failed to load devices'), findsOneWidget);
+  });
+
+  testWidgets('a background poll changes the state once if anything changed, else not at all', (tester) async {
+    final client = SlowClient();
+    final notifier = DevicesNotifier(client, pollInterval: const Duration(seconds: 5));
+    client.pending[0].complete(snap({'cast': 50}));
+    await tester.pump();
+    var changes = 0;
+    final remove = notifier.addListener((_) => changes++, fireImmediately: false);
+    await tester.pump(const Duration(seconds: 5)); // poll sent
+    client.pending[1].complete(snap({'cast': 50}));  // nothing changed
+    await tester.pump();
+    expect(changes, 0, reason: 'an unchanged list is not rebuilt every 5 s');
+    await tester.pump(const Duration(seconds: 5));
+    client.pending[2].complete(snap({'cast': 60}));  // the volume changed
+    await tester.pump();
+    expect(changes, 1, reason: 'no "loading" state for a poll: the list would rebuild twice');
+    remove();
+    notifier.dispose();
+  });
+
+  testWidgets('background polls do not turn Retry into a spinner', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        devicesProvider.overrideWith((ref) => DevicesNotifier(client, pollInterval: const Duration(seconds: 5))),
+      ],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].completeError(ApiException('Network error: unreachable'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5)); // a poll is in flight now
+    expect(client.pending.length, 2);
+    expect(find.text('Retry'), findsOneWidget);
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pump();
+  });
+
+  testWidgets('Retry on the error view shows that it is retrying', (tester) async {
+    final client = SlowClient();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [devicesProvider.overrideWith((ref) => DevicesNotifier(client))],
+      child: const MaterialApp(home: HomeScreen()),
+    ));
+    client.pending[0].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(find.text('Retry'), findsNothing, reason: 'no second tap while it runs');
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    client.pending[1].completeError(ApiException('Network error: unreachable'));
+    await tester.pumpAndSettle();
+    expect(find.text('Retry'), findsOneWidget);
+  });
+}

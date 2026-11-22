@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/devices_provider.dart';
@@ -32,9 +34,12 @@ class HomeScreen extends ConsumerWidget {
             ],
             onSelected: (v) {
               if (v == 'disconnect') {
-                ref.read(serviceProvider.notifier).disconnect();
+                unawaited(ref.read(serviceProvider.notifier).disconnect());
                 Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (_) => const ConnectScreen()),
+                  MaterialPageRoute(
+                    // The user chose to disconnect: don't auto-reconnect.
+                    builder: (_) => const ConnectScreen(autoScan: false),
+                  ),
                 );
               }
             },
@@ -43,28 +48,21 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          _ServiceStatusBar(serviceState: serviceState),
+          _ServiceStatusBar(
+            serviceState: serviceState,
+            // Unknown while the backend can't be reached (don't show stale state).
+            streaming: devicesAsync.hasError ? null : devicesAsync.valueOrNull?.streaming,
+          ),
+          // A failed background refresh keeps the last list on screen (so a
+          // Wi-Fi blip doesn't cut off a volume drag) and shows this banner.
+          if (devicesAsync.hasError && devicesAsync.hasValue)
+            const _OfflineBanner(),
           Expanded(
             child: devicesAsync.when(
+              skipError: true, // error view only when there is no list to show
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                    const SizedBox(height: 12),
-                    Text('Failed to load devices: $e',
-                        textAlign: TextAlign.center),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: () =>
-                          ref.read(devicesProvider.notifier).refresh(),
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ),
-              ),
-              data: (devices) => devices.isEmpty
+              error: (e, _) => _LoadErrorView(error: e),
+              data: (snapshot) => snapshot.devices.isEmpty
                   ? Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -85,9 +83,11 @@ class HomeScreen extends ConsumerWidget {
                       onRefresh: () =>
                           ref.read(devicesProvider.notifier).refresh(),
                       child: ListView.builder(
-                        itemCount: devices.length,
-                        itemBuilder: (_, i) =>
-                            DeviceCard(device: devices[i]),
+                        itemCount: snapshot.devices.length,
+                        itemBuilder: (_, i) => DeviceCard(
+                          key: ValueKey(snapshot.devices[i].id),
+                          device: snapshot.devices[i],
+                        ),
                       ),
                     ),
             ),
@@ -105,10 +105,41 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Colors.orange.shade50,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Row(
+        children: [
+          Icon(Icons.wifi_off, size: 16, color: Colors.orange.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "Can't reach Roomcast FM — showing the last known state, retrying…",
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.orange.shade900),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ServiceStatusBar extends StatelessWidget {
   final ServiceState serviceState;
 
-  const _ServiceStatusBar({required this.serviceState});
+  /// Whether the backend is streaming audio (null = not known yet).
+  final bool? streaming;
+
+  const _ServiceStatusBar({required this.serviceState, this.streaming});
 
   @override
   Widget build(BuildContext context) {
@@ -122,12 +153,73 @@ class _ServiceStatusBar extends StatelessWidget {
               size: 10,
               color: serviceState.isConnected ? Colors.green : Colors.grey),
           const SizedBox(width: 8),
-          Text(
-            serviceState.isConnected
-                ? 'Connected — ${serviceState.baseUrl}'
-                : 'Not connected',
-            style: Theme.of(context).textTheme.bodySmall,
+          Expanded(
+            child: Text(
+              serviceState.isConnected
+                  ? 'Connected — ${serviceState.baseUrl}'
+                  : 'Not connected',
+              style: Theme.of(context).textTheme.bodySmall,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
+          if (serviceState.isConnected && streaming != null) ...[
+            Icon(
+              streaming! ? Icons.graphic_eq : Icons.pause_circle_outline,
+              size: 16,
+              color: streaming! ? Colors.green : Colors.grey,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              streaming! ? 'Streaming' : 'Idle',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: streaming! ? Colors.green.shade700 : Colors.grey,
+                  ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The full-screen error when no list could be loaded yet.
+class _LoadErrorView extends ConsumerStatefulWidget {
+  final Object error;
+
+  const _LoadErrorView({required this.error});
+
+  @override
+  ConsumerState<_LoadErrorView> createState() => _LoadErrorViewState();
+}
+
+class _LoadErrorViewState extends ConsumerState<_LoadErrorView> {
+  /// The user's own retry is running. (Background polls also reload over the
+  /// error; they don't turn the button into a spinner.)
+  bool _retrying = false;
+
+  Future<void> _retry() async {
+    setState(() => _retrying = true);
+    try {
+      await ref.read(devicesProvider.notifier).refresh();
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, size: 48, color: Colors.red),
+          const SizedBox(height: 12),
+          Text('Failed to load devices: ${widget.error}', textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+          if (_retrying)
+            const CircularProgressIndicator()
+          else
+            FilledButton(onPressed: _retry, child: const Text('Retry')),
         ],
       ),
     );

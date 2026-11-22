@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
@@ -89,13 +91,24 @@ class _ScanScreenState extends ConsumerState<ScanScreen> {
   }
 }
 
-class _DiscoveredDeviceTile extends ConsumerWidget {
+class _DiscoveredDeviceTile extends ConsumerStatefulWidget {
   final DiscoveredDevice device;
 
   const _DiscoveredDeviceTile({required this.device});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_DiscoveredDeviceTile> createState() => _DiscoveredDeviceTileState();
+}
+
+class _DiscoveredDeviceTileState extends ConsumerState<_DiscoveredDeviceTile> {
+  /// An add request is in flight: a second tap would pair it again (and
+  /// the backend would replace the output it just created).
+  bool _adding = false;
+
+  DiscoveredDevice get device => widget.device;
+
+  @override
+  Widget build(BuildContext context) {
     return ListTile(
       leading: Icon(
         device.type == DeviceType.chromecast
@@ -108,34 +121,44 @@ class _DiscoveredDeviceTile extends ConsumerWidget {
         device.type == DeviceType.chromecast ? 'Google Cast' : 'DLNA / UPnP',
       ),
       trailing: FilledButton(
-        onPressed: () => _addDevice(context, ref),
+        // Watched: a tile rebuilt by "Scan again" re-enables when the add ends.
+        onPressed: _adding || ref.watch(addingDevicesProvider).contains(device.idSuggestion)
+            ? null
+            : _addDevice,
         child: const Text('Add'),
       ),
     );
   }
 
-  Future<void> _addDevice(BuildContext context, WidgetRef ref) async {
+  Future<void> _addDevice() async {
+    setState(() => _adding = true);
+    // Captured first: the tile can be rebuilt (e.g. "Scan again") before the
+    // request finishes, and its result must still be shown and applied.
+    final devices = ref.read(devicesProvider.notifier);
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    final name = device.name;
     // Use id_suggestion as the device id, deduplicated at API level
-    final ok = await ref
+    final error = await ref
         .read(scanProvider.notifier)
         .addDevice(device, device.idSuggestion);
 
-    if (!context.mounted) return;
-
-    if (ok) {
-      // Refresh paired list
-      ref.read(devicesProvider.notifier).refresh();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${device.name} added')),
-      );
-      Navigator.of(context).pop();
+    if (error == ScanNotifier.alreadyAdding) {
+      if (mounted) setState(() => _adding = false);
+      return; // a second tap: the first add shows the outcome
+    }
+    if (error == null) {
+      if (devices.mounted) unawaited(devices.refresh()); // the paired list
+      messenger.showSnackBar(SnackBar(content: Text('$name added')));
+      // Close the scan screen if it is still the one on top (this tile may
+      // have been rebuilt meanwhile; the screen is what matters).
+      if (route != null && route.isCurrent) navigator.pop();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to add ${device.name}'),
-          backgroundColor: Colors.red,
-        ),
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to add $name: $error'), backgroundColor: Colors.red),
       );
     }
+    if (mounted) setState(() => _adding = false);
   }
 }

@@ -46,14 +46,9 @@ class RoomcastApiClient {
   // Paired devices
   // ------------------------------------------------------------------
 
-  /// List all paired devices with their live status.
-  Future<List<PairedDevice>> listDevices() async {
-    final data = await _get('/api/devices');
-    final list = data['outputs'] as List<dynamic>? ?? [];
-    return list
-        .cast<Map<String, dynamic>>()
-        .map(PairedDevice.fromJson)
-        .toList();
+  /// All paired devices with their live status, plus whether audio is streaming.
+  Future<DevicesSnapshot> getDevices() async {
+    return DevicesSnapshot.fromJson(await _get('/api/devices'));
   }
 
   /// Add (pair) a new device. Config must include id + type.
@@ -63,9 +58,16 @@ class RoomcastApiClient {
 
   /// Remove (unpair) a device by id.
   Future<void> removeDevice(String id) async {
-    final uri = Uri.parse('$baseUrl/api/devices/$id');
-    final response = await _http.delete(uri).timeout(const Duration(seconds: 5));
-    _checkStatus(response);
+    try {
+      final response = await _http
+          .delete(Uri.parse('$baseUrl/api/devices/${Uri.encodeComponent(id)}'))
+          .timeout(const Duration(seconds: 10));
+      _checkStatus(response);
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      throw ApiException('Network error: $e');
+    }
   }
 
   // ------------------------------------------------------------------
@@ -73,15 +75,15 @@ class RoomcastApiClient {
   // ------------------------------------------------------------------
 
   Future<void> setVolume(String id, int level) async {
-    await _post('/api/devices/$id/volume', {'level': level});
+    await _post('/api/devices/${Uri.encodeComponent(id)}/volume', {'level': level});
   }
 
   Future<void> enableDevice(String id) async {
-    await _post('/api/devices/$id/enable', {});
+    await _post('/api/devices/${Uri.encodeComponent(id)}/enable', {});
   }
 
   Future<void> disableDevice(String id) async {
-    await _post('/api/devices/$id/disable', {});
+    await _post('/api/devices/${Uri.encodeComponent(id)}/disable', {});
   }
 
   // ------------------------------------------------------------------
